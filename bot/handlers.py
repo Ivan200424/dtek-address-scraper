@@ -293,10 +293,9 @@ async def confirm_address_handler(
 
     # Перевірка наявності всіх необхідних даних у context.user_data
     required_keys = ["region", "city", "street", "building"]
-    missing_keys = [key for key in required_keys if key not in context.user_data]
     
-    if missing_keys:
-        logger.error("Відсутні необхідні дані в context.user_data: %s", missing_keys)
+    if any(key not in context.user_data for key in required_keys):
+        logger.error("Відсутні необхідні дані в context.user_data")
         await update.message.reply_text(
             "❌ Виникла помилка. Будь ласка, спробуйте додати адресу знову.",
             reply_markup=keyboards.main_menu_keyboard(),

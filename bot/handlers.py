@@ -293,9 +293,9 @@ async def confirm_address_handler(
     db = get_db(context)
 
     required_keys = ["region", "city", "street", "building"]
-    if any(key not in context.user_data for key in required_keys):
-        logger.error("Відсутні дані user_data для %s: %s", user.id, 
-                    [k for k in required_keys if k not in context.user_data])
+    missing_keys = [k for k in required_keys if k not in context.user_data]
+    if missing_keys:
+        logger.error("Відсутні дані user_data для %s: %s", user.id, missing_keys)
         await update.message.reply_text(
             "❌ Виникла помилка. Будь ласка, спробуйте додати адресу знову.",
             reply_markup=keyboards.main_menu_keyboard(),
@@ -341,21 +341,27 @@ async def confirm_address_handler(
             )
         except Exception as insert_err:
             # Fallback: зберегти без queue_number (якщо колонка не існує)
-            logger.warning(
-                "INSERT з queue_number не вдався: %s. Пробую без queue_number...",
-                insert_err,
-                exc_info=True
-            )
-            await add_address_without_queue(
-                db,
-                user_id=db_user["id"],
-                region=region_key,
-                city=city,
-                street=street,
-                building=building,
-                full_address=full_address,
-                normalized_address=normalized,
-            )
+            # Перевірити чи це помилка, пов'язана з колонкою queue_number
+            error_msg = str(insert_err).lower()
+            if 'queue_number' in error_msg or 'column' in error_msg:
+                logger.warning(
+                    "INSERT з queue_number не вдався (можлива проблема з колонкою): %s. Пробую без queue_number...",
+                    insert_err,
+                    exc_info=True
+                )
+                await add_address_without_queue(
+                    db,
+                    user_id=db_user["id"],
+                    region=region_key,
+                    city=city,
+                    street=street,
+                    building=building,
+                    full_address=full_address,
+                    normalized_address=normalized,
+                )
+            else:
+                # Інша помилка - пробросити далі
+                raise
 
         await update.message.reply_text(
             messages.ADDRESS_SAVED,

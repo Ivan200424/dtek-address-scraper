@@ -14,6 +14,7 @@ logger = logging.getLogger("services.queue_checker")
 NAVIGATION_TIMEOUT = 60000  # 60 секунд
 AUTOCOMPLETE_TIMEOUT = 15000  # 15 секунд (збільшено)
 WRAPPER_TIMEOUT = 120000  # 120 секунд
+TYPING_DELAY_MS = 30  # Затримка між натисканнями клавіш для автодоповнення
 
 
 async def get_queue_number(
@@ -193,7 +194,7 @@ async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
     
     try:
         # Очікування та заповнення поля (використання type замість fill для емуляції набору)
-        await page.type(input_selector, value, delay=30)
+        await page.type(input_selector, value, delay=TYPING_DELAY_MS)
         logger.info("Заповнено поле %s значенням: %s", field_name, value)
         
         # Очікування появи випадаючого списку автодоповнення
@@ -288,10 +289,10 @@ async def _fill_form_and_get_queue(
             
             # Спробувати знайти badge з номером черги на сторінці
             try:
-                queue_el = await page.query_selector("text=/[Чч]ерга\\s*\\d+/")
+                queue_el = await page.query_selector(r"text=/[Чч]ерга\s*\d+/")
                 if queue_el:
                     text = await queue_el.text_content()
-                    match = re.search(r'[Чч]ерга\\s*(\\d+\\.?\\d*)', text)
+                    match = re.search(r'[Чч]ерга\s*(\d+\.?\d*)', text)
                     if match:
                         queue_number = match.group(1)
                         logger.info("Знайдено номер черги через badge: %s", queue_number)

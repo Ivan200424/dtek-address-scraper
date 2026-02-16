@@ -331,7 +331,7 @@ async def confirm_address_handler(
     try:
         normalized = BaseParser.normalize_address(full_address)
     except Exception as e:
-        logger.warning("Помилка нормалізації адреси '%s' для користувача %s: %s", full_address, user.id, e)
+        logger.warning("Помилка нормалізації адреси '%s' для користувача %s: %s", full_address, user.id, e, exc_info=True)
         normalized = full_address
 
     try:

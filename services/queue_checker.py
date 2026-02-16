@@ -24,21 +24,21 @@ STREET_PREFIXES = ["вул. ", "просп. ", "пров. ", "пл. ", "б-р. "
 
 def strip_prefix(text: str, prefixes: list[str]) -> str:
     """Strip known prefixes from text.
-    
+
     Args:
         text: Text to strip prefix from
         prefixes: List of prefixes to try removing
-        
+
     Returns:
         Text with prefix removed if found, otherwise original text
     """
     if not text:
         return text
-    
+
     for prefix in prefixes:
         if text.startswith(prefix):
             return text[len(prefix):]
-    
+
     return text
 
 

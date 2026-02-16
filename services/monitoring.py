@@ -20,9 +20,6 @@ from parsers.odesa_parser import OdesaParser
 from services.address_matcher import AddressMatcher
 from services.notification import NotificationService
 
-logger = logging.getLogger("monitoring")
-
-
 class MonitoringService:
     """Сервіс моніторингу аварійних відключень ДТЕК."""
 

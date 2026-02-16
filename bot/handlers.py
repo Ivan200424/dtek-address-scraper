@@ -428,17 +428,15 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def menu_text_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обробка текстових кнопок головного меню."""
+    """Обробка текстових кнопок головного меню (крім 'Додати адресу')."""
     text = update.message.text
 
-    if text == "📍 Додати адресу":
-        return await add_address_start(update, context)
-    elif text == "📋 Мої адреси":
-        return await my_addresses_handler(update, context)
+    if text == "📋 Мої адреси":
+        await my_addresses_handler(update, context)
     elif text == "🔍 Перевірити статус":
-        return await status_handler(update, context)
+        await status_handler(update, context)
     elif text == "❓ Допомога":
-        return await help_handler(update, context)
+        await help_handler(update, context)
 
 
 # ===================== Error handler =====================
@@ -465,6 +463,7 @@ def register_handlers(app) -> None:
     add_address_conv = ConversationHandler(
         entry_points=[
             CommandHandler("add_address", add_address_start),
+            MessageHandler(filters.Regex("^📍 Додати адресу$"), add_address_start),
         ],
         states={
             SELECT_REGION: [
@@ -502,10 +501,10 @@ def register_handlers(app) -> None:
     app.add_handler(CallbackQueryHandler(confirm_delete_callback, pattern=r"^confirm_del_\d+$"))
     app.add_handler(CallbackQueryHandler(cancel_delete_callback, pattern=r"^cancel_delete$"))
 
-    # Текстові кнопки меню
+    # Текстові кнопки меню (крім "Додати адресу" — обробляється в ConversationHandler)
     app.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
-            r"^(📍 Додати адресу|📋 Мої адреси|🔍 Перевірити статус|❓ Допомога)$"
+            r"^(📋 Мої адреси|🔍 Перевірити статус|❓ Допомога)$"
         ),
         menu_text_handler,
     ))

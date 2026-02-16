@@ -9,9 +9,6 @@ from database.connection import Database
 from database.models import create_notification, get_user_by_chat_id
 from utils.helpers import escape_html, format_datetime
 
-logger = logging.getLogger("notification")
-
-
 class NotificationService:
     """Сервіс для відправки сповіщень користувачам через Telegram."""
 

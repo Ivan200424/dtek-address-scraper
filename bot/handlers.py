@@ -343,9 +343,12 @@ async def confirm_address_handler(
             # Fallback: зберегти без queue_number (якщо колонка не існує)
             # Перевірити чи це помилка, пов'язана з колонкою queue_number
             error_msg = str(insert_err).lower()
-            if 'queue_number' in error_msg or 'column' in error_msg:
+            is_column_error = ('queue_number' in error_msg and 'column' in error_msg) or \
+                             ('queue_number' in error_msg and 'does not exist' in error_msg)
+            
+            if is_column_error:
                 logger.warning(
-                    "INSERT з queue_number не вдався (можлива проблема з колонкою): %s. Пробую без queue_number...",
+                    "INSERT з queue_number не вдався (колонка відсутня): %s. Пробую без queue_number...",
                     insert_err,
                     exc_info=True
                 )

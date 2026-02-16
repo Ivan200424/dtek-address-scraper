@@ -248,7 +248,8 @@ async def _fill_form_and_get_queue(
 
         async def handle_response(response):
             nonlocal ajax_response_data
-            if "/ua/ajax" in response.url or "ajax" in response.url.lower():
+            # Перехоплюємо тільки AJAX запити до DTEK API
+            if "/ua/ajax" in response.url or "/shutdowns" in response.url:
                 try:
                     data = await response.json()
                     ajax_response_data = data
@@ -289,10 +290,10 @@ async def _fill_form_and_get_queue(
             
             # Спробувати знайти badge з номером черги на сторінці
             try:
-                queue_el = await page.query_selector(r"text=/[Чч]ерга\s*\d+/")
+                queue_el = await page.wait_for_selector(r"text=/[Чч]ерга\s*\d+/", timeout=5000, state="attached")
                 if queue_el:
                     text = await queue_el.text_content()
-                    match = re.search(r'[Чч]ерга\s*(\d+\.?\d*)', text)
+                    match = re.search(r'[Чч]ерга\s*(\d+(?:\.\d+)?)', text)
                     if match:
                         queue_number = match.group(1)
                         logger.info("Знайдено номер черги через badge: %s", queue_number)

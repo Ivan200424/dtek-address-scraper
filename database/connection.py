@@ -80,6 +80,29 @@ class Database:
             async with self.pool.acquire() as conn:
                 await conn.execute(sql)
             logger.info("Таблиці БД ініціалізовано")
+            
+            # Переконатися що колонка queue_number існує
+            await self.ensure_queue_column()
         except Exception as e:
             logger.error("Помилка ініціалізації таблиць: %s", e)
             raise
+
+    async def ensure_queue_column(self) -> None:
+        """Переконатися що колонка queue_number існує."""
+        try:
+            async with self.pool.acquire() as conn:
+                exists = await conn.fetchval(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='addresses' AND column_name='queue_number'
+                    )
+                    """
+                )
+                if not exists:
+                    await conn.execute(
+                        "ALTER TABLE addresses ADD COLUMN queue_number VARCHAR(20)"
+                    )
+                    logger.info("Колонку queue_number додано до таблиці addresses")
+        except Exception as e:
+            logger.warning("Помилка перевірки/додавання колонки queue_number: %s", e)

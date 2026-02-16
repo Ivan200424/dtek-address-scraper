@@ -11,9 +11,9 @@ from config.regions import REGIONS
 logger = logging.getLogger("services.queue_checker")
 
 # Таймаути для Playwright операцій (в мілісекундах)
-NAVIGATION_TIMEOUT = 60000  # 60 секунд (збільшено для повільних сайтів)
-AUTOCOMPLETE_TIMEOUT = 10000  # 10 секунд
-WRAPPER_TIMEOUT = 120000  # 120 секунд для очікування завантаження сторінки (збільшено через popup)
+NAVIGATION_TIMEOUT = 60000  # 60 секунд
+AUTOCOMPLETE_TIMEOUT = 15000  # 15 секунд (збільшено)
+WRAPPER_TIMEOUT = 120000  # 120 секунд
 
 
 async def get_queue_number(
@@ -94,7 +94,7 @@ async def _try_close_popup(page) -> None:
     Args:
         page: Playwright page object
     """
-    close_selectors = [
+    popup_close_selectors = [
         "button.close",
         ".modal .close",
         ".popup .close",
@@ -102,14 +102,16 @@ async def _try_close_popup(page) -> None:
         "button[aria-label='Close']",
         ".modal-header .close",
         "button.btn-close",
+        ".modal button",
+        "[data-dismiss='modal']",
     ]
     
-    for selector in close_selectors:
+    for selector in popup_close_selectors:
         try:
-            close_btn = await page.wait_for_selector(selector, state="visible", timeout=3000)
-            if close_btn:
-                await close_btn.click()
-                logger.info("Закрито popup через селектор: %s", selector)
+            btn = await page.wait_for_selector(selector, state="visible", timeout=3000)
+            if btn:
+                await btn.click()
+                logger.info("Закрито popup через: %s", selector)
                 await page.wait_for_timeout(500)
                 return
         except PlaywrightTimeoutError:
@@ -190,8 +192,8 @@ async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
     option_selector = f"{input_selector} ~ .autocomplete-items > div"
     
     try:
-        # Очікування та заповнення поля
-        await page.fill(input_selector, value)
+        # Очікування та заповнення поля (використання type замість fill для емуляції набору)
+        await page.type(input_selector, value, delay=50)
         logger.info("Заповнено поле %s значенням: %s", field_name, value)
         
         # Очікування появи випадаючого списку автодоповнення
@@ -240,17 +242,18 @@ async def _fill_form_and_get_queue(
         # Спробувати закрити popup (якщо є)
         await _try_close_popup(page)
         
-        # Перехоплення AJAX відповіді
+        # Перехоплення AJAX відповіді ПЕРЕД заповненням полів
         ajax_response_data = None
 
         async def handle_response(response):
             nonlocal ajax_response_data
-            if "/ua/ajax" in response.url:
+            if "/ua/ajax" in response.url or "ajax" in response.url.lower():
                 try:
-                    ajax_response_data = await response.json()
-                    logger.info("Перехоплено AJAX відповідь від %s", response.url)
-                except Exception as e:
-                    logger.debug("Не вдалося розпарсити AJAX відповідь: %s", e)
+                    data = await response.json()
+                    ajax_response_data = data
+                    logger.info("Перехоплено AJAX: %s", response.url)
+                except Exception:
+                    pass
 
         page.on("response", handle_response)
         
@@ -280,27 +283,21 @@ async def _fill_form_and_get_queue(
                 logger.warning("Не вдалося заповнити поле будинку")
                 return "невідомо"
             
-            # Після заповнення всіх полів, сайт автоматично відправляє AJAX запит до /ua/ajax
-            # Дочекатися відповіді та встановлення змінної DisconSchedule.group
+            # Після заповнення всіх полів, дочекатися оновлення інформації
             await page.wait_for_timeout(3000)
             
             # Спробувати знайти badge з номером черги на сторінці
             try:
-                # Шукати текст типу "Черга 1.1" або "Черга 2" (підтримка десяткових та багатозначних чисел)
-                queue_element = await page.wait_for_selector(
-                    "text=/Черга\\s+\\d+(?:\\.\\d+)?/i", timeout=5000
-                )
-                if queue_element:
-                    queue_text = await queue_element.text_content()
-                    match = re.search(r'(\d+(?:\.\d+)?)', queue_text)
+                queue_el = await page.query_selector("text=/[Чч]ерга\\s*\\d/")
+                if queue_el:
+                    text = await queue_el.text_content()
+                    match = re.search(r'(\d+\.?\d*)', text)
                     if match:
                         queue_number = match.group(1)
                         logger.info("Знайдено номер черги через badge: %s", queue_number)
                         return queue_number
-            except PlaywrightTimeoutError:
-                logger.debug("Badge з номером черги не знайдено")
             except Exception as e:
-                logger.debug("Помилка пошуку badge з номером черги: %s", e)
+                logger.debug("Помилка пошуку badge: %s", e)
             
             # Спробувати отримати номер черги з JavaScript змінної DisconSchedule.group
             try:

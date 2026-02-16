@@ -90,6 +90,32 @@ async def add_address(
         raise
 
 
+async def add_address_without_queue(
+    db: Database,
+    user_id: int,
+    region: str,
+    city: str | None,
+    street: str,
+    building: str | None,
+    full_address: str,
+    normalized_address: str | None,
+) -> Any:
+    """Додати адресу користувача без поля queue_number (fallback)."""
+    try:
+        return await db.fetchrow(
+            """
+            INSERT INTO addresses
+                (user_id, region, city, street, building, full_address, normalized_address)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING *
+            """,
+            user_id, region, city, street, building, full_address, normalized_address,
+        )
+    except Exception as e:
+        logger.error("Помилка додавання адреси (fallback): %s", e)
+        raise
+
+
 async def get_user_addresses(db: Database, user_id: int) -> list[Any]:
     """Отримати список адрес користувача."""
     try:

@@ -101,6 +101,12 @@ async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
     Returns:
         True якщо успішно, False якщо помилка
     """
+    # Validate field_name to prevent selector injection
+    valid_fields = {'city', 'street', 'house_num'}
+    if field_name not in valid_fields:
+        logger.error("Некоректне ім'я поля: %s. Дозволені: %s", field_name, valid_fields)
+        return False
+    
     input_selector = f"input[name={field_name}]"
     option_selector = f"{input_selector} ~ .autocomplete-items > div"
     
@@ -190,19 +196,12 @@ async def _fill_form_and_get_queue(
                 logger.info("Отримано значення DisconSchedule.group: %s", queue_group)
                 
                 # Парсинг номера черги з формату "1.1 черга" або подібного
-                # Підтримка десяткових чисел (1.1, 2.2, тощо)
-                match = re.search(r'(\d+\.\d+)', str(queue_group))
+                # Підтримка десяткових чисел (1.1, 2.2) та цілих чисел (1, 2)
+                match = re.search(r'(\d+(?:\.\d+)?)', str(queue_group))
                 if match:
                     queue_number = match.group(1)
                     logger.info("Знайдено номер черги: %s", queue_number)
                     return queue_number
-                else:
-                    # Спробувати знайти ціле число, якщо немає десяткової частини
-                    match = re.search(r'(\d+)', str(queue_group))
-                    if match:
-                        queue_number = match.group(1)
-                        logger.info("Знайдено номер черги (ціле число): %s", queue_number)
-                        return queue_number
             else:
                 logger.warning("DisconSchedule.group не знайдено або порожнє")
         except Exception as e:
@@ -214,11 +213,12 @@ async def _fill_form_and_get_queue(
             page_content = await page.content()
             
             # Шукати патерни типу "1.1 черга", "Черга: 1.1", тощо
+            # Підтримка як десяткових (1.1, 2.2), так і цілих чисел (1, 2)
             patterns = [
-                r'(\d+\.\d+)\s*черга',
-                r'черга[:\s]+(\d+\.\d+)',
-                r'група[:\s]+(\d+\.\d+)',
-                r'group[:\s]+(\d+\.\d+)',
+                r'(\d+(?:\.\d+)?)\s*черга',
+                r'черга[:\s]+(\d+(?:\.\d+)?)',
+                r'група[:\s]+(\d+(?:\.\d+)?)',
+                r'group[:\s]+(\d+(?:\.\d+)?)',
             ]
             
             for pattern in patterns:

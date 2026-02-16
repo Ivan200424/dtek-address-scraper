@@ -49,8 +49,7 @@ class Database:
                 # Execute each statement separately to handle DROP + CREATE properly
                 statements = [s.strip() for s in sql.split(';') if s.strip()]
                 for statement in statements:
-                    if statement:
-                        await conn.execute(statement + ';')
+                    await conn.execute(statement + ';')
                 logger.info("Database tables initialized")
         except Exception as e:
             logger.error("Failed to initialize tables: %s", e)

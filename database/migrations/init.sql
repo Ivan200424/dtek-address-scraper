@@ -1,6 +1,7 @@
 -- Database initialization for DTEK power outage monitoring bot
 
 -- Drop old tables to recreate with correct schema
+-- Dropped in reverse dependency order for clarity (same as CREATE order, reversed)
 -- CASCADE automatically drops dependent objects (foreign keys, indexes, etc.)
 DROP TABLE IF EXISTS notifications CASCADE;
 DROP TABLE IF EXISTS outages CASCADE;

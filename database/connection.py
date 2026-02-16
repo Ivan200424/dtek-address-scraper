@@ -42,12 +42,15 @@ class Database:
             raise RuntimeError("Database not connected")
 
         try:
-            # Read and execute init.sql
             with open("database/migrations/init.sql", "r", encoding="utf-8") as f:
                 sql = f.read()
 
             async with self.pool.acquire() as conn:
-                await conn.execute(sql)
+                # Execute each statement separately to handle DROP + CREATE properly
+                statements = [s.strip() for s in sql.split(';') if s.strip()]
+                for statement in statements:
+                    if statement:
+                        await conn.execute(statement + ';')
                 logger.info("Database tables initialized")
         except Exception as e:
             logger.error("Failed to initialize tables: %s", e)

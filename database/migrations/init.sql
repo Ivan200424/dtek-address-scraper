@@ -1,5 +1,12 @@
 -- Database initialization for DTEK power outage monitoring bot
 
+-- Drop old tables to recreate with correct schema
+-- Order matters due to foreign key constraints
+DROP TABLE IF EXISTS notifications CASCADE;
+DROP TABLE IF EXISTS outages CASCADE;
+DROP TABLE IF EXISTS addresses CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,

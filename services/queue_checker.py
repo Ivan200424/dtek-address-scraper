@@ -11,9 +11,9 @@ from config.regions import REGIONS
 logger = logging.getLogger("services.queue_checker")
 
 # Таймаути для Playwright операцій (в мілісекундах)
-NAVIGATION_TIMEOUT = 30000  # 30 секунд
+NAVIGATION_TIMEOUT = 60000  # 60 секунд (збільшено для повільних сайтів)
 AUTOCOMPLETE_TIMEOUT = 10000  # 10 секунд
-WRAPPER_TIMEOUT = 60000  # 60 секунд для очікування завантаження сторінки
+WRAPPER_TIMEOUT = 120000  # 120 секунд для очікування завантаження сторінки (збільшено через popup)
 
 
 async def get_queue_number(
@@ -88,6 +88,39 @@ async def get_queue_number(
         return None
 
 
+async def _try_close_popup(page) -> None:
+    """Спробувати закрити popup/modal вікно, якщо воно є.
+    
+    Args:
+        page: Playwright page object
+    """
+    close_selectors = [
+        "button.close",
+        ".modal .close",
+        ".popup .close",
+        "[class*='close']",
+        "button[aria-label='Close']",
+        ".modal-header .close",
+        "button.btn-close",
+    ]
+    
+    for selector in close_selectors:
+        try:
+            close_btn = await page.wait_for_selector(selector, state="visible", timeout=3000)
+            if close_btn:
+                await close_btn.click()
+                logger.info("Закрито popup через селектор: %s", selector)
+                await page.wait_for_timeout(500)
+                return
+        except PlaywrightTimeoutError:
+            continue
+        except Exception as e:
+            logger.debug("Помилка при спробі закрити popup через %s: %s", selector, e)
+            continue
+    
+    logger.debug("Popup не знайдено або вже закрито")
+
+
 async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
     """Заповнити поле з автодоповненням на сайті ДТЕК.
     
@@ -107,12 +140,57 @@ async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
         logger.error("Некоректне ім'я поля: %s. Дозволені: %s", field_name, valid_fields)
         return False
     
-    input_selector = f"input[name={field_name}]"
+    # Альтернативні селектори для полів на випадок іншої DOM-структури
+    alternative_selectors = {
+        'city': [
+            "input[name=city]",
+            "input[placeholder*='Почніть вводити']",
+            "input[placeholder*='населений пункт']",
+            "input[placeholder*='нас. пункт']",
+            ".autocomplete input",
+            "[class*='city'] input",
+            "input[id*='city']",
+            "input[id*='locality']",
+        ],
+        'street': [
+            "input[name=street]",
+            "input[placeholder*='вулиц']",
+            "input[placeholder*='Почніть вводити дан']",
+            "[class*='street'] input",
+            "input[id*='street']",
+        ],
+        'house_num': [
+            "input[name=house_num]",
+            "input[placeholder*='будинку']",
+            "input[placeholder*='Номер будинку']",
+            "[class*='house'] input",
+            "input[id*='house']",
+            "input[id*='building']",
+        ]
+    }
+    
+    selectors_to_try = alternative_selectors.get(field_name, [f"input[name={field_name}]"])
+    
+    # Спробувати знайти поле використовуючи альтернативні селектори
+    input_selector = None
+    for selector in selectors_to_try:
+        try:
+            element = await page.wait_for_selector(selector, state="attached", timeout=3000)
+            if element:
+                input_selector = selector
+                logger.info("Знайдено поле %s через селектор: %s", field_name, selector)
+                break
+        except PlaywrightTimeoutError:
+            continue
+    
+    if not input_selector:
+        logger.error("Не вдалося знайти поле %s через жоден з селекторів", field_name)
+        return False
+    
     option_selector = f"{input_selector} ~ .autocomplete-items > div"
     
     try:
         # Очікування та заповнення поля
-        await page.wait_for_selector(input_selector, state="attached", timeout=AUTOCOMPLETE_TIMEOUT)
         await page.fill(input_selector, value)
         logger.info("Заповнено поле %s значенням: %s", field_name, value)
         
@@ -159,87 +237,143 @@ async def _fill_form_and_get_queue(
     - DisconSchedule.group для отримання номера черги
     """
     try:
-        # Для всіх регіонів, окрім Києва, потрібно заповнити поле міста
-        if region_key != "kyiv" and city:
-            success = await _fill_autocomplete(page, "city", city)
+        # Спробувати закрити popup (якщо є)
+        await _try_close_popup(page)
+        
+        # Перехоплення AJAX відповіді
+        ajax_response_data = None
+
+        async def handle_response(response):
+            nonlocal ajax_response_data
+            if "/ua/ajax" in response.url:
+                try:
+                    ajax_response_data = await response.json()
+                    logger.info("Перехоплено AJAX відповідь від %s", response.url)
+                except Exception as e:
+                    logger.debug("Не вдалося розпарсити AJAX відповідь: %s", e)
+
+        page.on("response", handle_response)
+        
+        try:
+            # Для всіх регіонів, окрім Києва, потрібно заповнити поле міста
+            if region_key != "kyiv" and city:
+                success = await _fill_autocomplete(page, "city", city)
+                if not success:
+                    logger.warning("Не вдалося заповнити поле міста")
+                    return "невідомо"
+                
+                # Короткий таймаут після вибору міста (дозволити AJAX оновити залежні поля)
+                await page.wait_for_timeout(1000)
+            
+            # Заповнити вулицю
+            success = await _fill_autocomplete(page, "street", street)
             if not success:
-                logger.warning("Не вдалося заповнити поле міста")
+                logger.warning("Не вдалося заповнити поле вулиці")
                 return "невідомо"
             
-            # Короткий таймаут після вибору міста (дозволити AJAX оновити залежні поля)
+            # Короткий таймаут після вибору вулиці (дозволити AJAX оновити залежні поля)
             await page.wait_for_timeout(1000)
-        
-        # Заповнити вулицю
-        success = await _fill_autocomplete(page, "street", street)
-        if not success:
-            logger.warning("Не вдалося заповнити поле вулиці")
-            return "невідомо"
-        
-        # Короткий таймаут після вибору вулиці (дозволити AJAX оновити залежні поля)
-        await page.wait_for_timeout(1000)
-        
-        # Заповнити будинок
-        success = await _fill_autocomplete(page, "house_num", building)
-        if not success:
-            logger.warning("Не вдалося заповнити поле будинку")
-            return "невідомо"
-        
-        # Після заповнення всіх полів, сайт автоматично відправляє AJAX запит до /ua/ajax
-        # Дочекатися відповіді та встановлення змінної DisconSchedule.group
-        await page.wait_for_timeout(3000)
-        
-        # Спробувати отримати номер черги з JavaScript змінної DisconSchedule.group
-        try:
-            queue_group = await page.evaluate(
-                "() => window.DisconSchedule?.group || null"
-            )
             
-            if queue_group:
-                logger.info("Отримано значення DisconSchedule.group: %s (type: %s)", queue_group, type(queue_group).__name__)
+            # Заповнити будинок
+            success = await _fill_autocomplete(page, "house_num", building)
+            if not success:
+                logger.warning("Не вдалося заповнити поле будинку")
+                return "невідомо"
+            
+            # Після заповнення всіх полів, сайт автоматично відправляє AJAX запит до /ua/ajax
+            # Дочекатися відповіді та встановлення змінної DisconSchedule.group
+            await page.wait_for_timeout(3000)
+            
+            # Спробувати знайти badge з номером черги на сторінці
+            try:
+                # Шукати текст типу "Черга 1.1" або "Черга 2" (підтримка десяткових та багатозначних чисел)
+                queue_element = await page.wait_for_selector(
+                    "text=/Черга\\s+\\d+(?:\\.\\d+)?/i", timeout=5000
+                )
+                if queue_element:
+                    queue_text = await queue_element.text_content()
+                    match = re.search(r'(\d+(?:\.\d+)?)', queue_text)
+                    if match:
+                        queue_number = match.group(1)
+                        logger.info("Знайдено номер черги через badge: %s", queue_number)
+                        return queue_number
+            except PlaywrightTimeoutError:
+                logger.debug("Badge з номером черги не знайдено")
+            except Exception as e:
+                logger.debug("Помилка пошуку badge з номером черги: %s", e)
+            
+            # Спробувати отримати номер черги з JavaScript змінної DisconSchedule.group
+            try:
+                queue_group = await page.evaluate(
+                    "() => window.DisconSchedule?.group || null"
+                )
                 
-                # Handle numeric types directly
-                if isinstance(queue_group, (int, float)):
-                    queue_number = str(queue_group)
-                    logger.info("Знайдено номер черги (числовий тип): %s", queue_number)
-                    return queue_number
+                if queue_group:
+                    logger.info("Отримано значення DisconSchedule.group: %s (type: %s)", queue_group, type(queue_group).__name__)
+                    
+                    # Handle numeric types directly
+                    if isinstance(queue_group, (int, float)):
+                        queue_number = str(queue_group)
+                        logger.info("Знайдено номер черги (числовий тип): %s", queue_number)
+                        return queue_number
+                    
+                    # Парсинг номера черги з формату "1.1 черга" або подібного
+                    # Підтримка десяткових чисел (1.1, 2.2) та цілих чисел (1, 2)
+                    match = re.search(r'(\d+(?:\.\d+)?)', str(queue_group))
+                    if match:
+                        queue_number = match.group(1)
+                        logger.info("Знайдено номер черги (через regex): %s", queue_number)
+                        return queue_number
+                else:
+                    logger.warning("DisconSchedule.group не знайдено або порожнє")
+            except Exception as e:
+                logger.error("Помилка читання DisconSchedule.group: %s", e)
+            
+            # Спробувати отримати номер черги з перехопленої AJAX відповіді
+            if ajax_response_data:
+                try:
+                    # Шукати в AJAX відповіді поле з номером черги
+                    if isinstance(ajax_response_data, dict):
+                        for key in ['group', 'queue', 'queue_number', 'черга']:
+                            if key in ajax_response_data:
+                                queue_value = ajax_response_data[key]
+                                if queue_value:
+                                    match = re.search(r'(\d+(?:\.\d+)?)', str(queue_value))
+                                    if match:
+                                        queue_number = match.group(1)
+                                        logger.info("Знайдено номер черги через AJAX відповідь: %s", queue_number)
+                                        return queue_number
+                except Exception as e:
+                    logger.debug("Помилка обробки AJAX відповіді: %s", e)
+            
+            # Альтернативний підхід: перехоплення AJAX відповіді до /ua/ajax
+            # Якщо DisconSchedule.group не спрацював, спробуємо знайти інформацію на сторінці
+            try:
+                page_content = await page.content()
                 
-                # Парсинг номера черги з формату "1.1 черга" або подібного
-                # Підтримка десяткових чисел (1.1, 2.2) та цілих чисел (1, 2)
-                match = re.search(r'(\d+(?:\.\d+)?)', str(queue_group))
-                if match:
-                    queue_number = match.group(1)
-                    logger.info("Знайдено номер черги (через regex): %s", queue_number)
-                    return queue_number
-            else:
-                logger.warning("DisconSchedule.group не знайдено або порожнє")
-        except Exception as e:
-            logger.error("Помилка читання DisconSchedule.group: %s", e)
-        
-        # Альтернативний підхід: перехоплення AJAX відповіді до /ua/ajax
-        # Якщо DisconSchedule.group не спрацював, спробуємо знайти інформацію на сторінці
-        try:
-            page_content = await page.content()
+                # Шукати патерни типу "1.1 черга", "Черга: 1.1", тощо
+                # Підтримка як десяткових (1.1, 2.2), так і цілих чисел (1, 2)
+                patterns = [
+                    r'(\d+(?:\.\d+)?)\s*черга',
+                    r'черга[:\s]+(\d+(?:\.\d+)?)',
+                    r'група[:\s]+(\d+(?:\.\d+)?)',
+                    r'group[:\s]+(\d+(?:\.\d+)?)',
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, page_content, re.IGNORECASE)
+                    if match:
+                        queue_number = match.group(1)
+                        logger.info("Знайдено номер черги через патерн '%s': %s", pattern, queue_number)
+                        return queue_number
+            except Exception as e:
+                logger.error("Помилка пошуку номера черги в контенті сторінки: %s", e)
             
-            # Шукати патерни типу "1.1 черга", "Черга: 1.1", тощо
-            # Підтримка як десяткових (1.1, 2.2), так і цілих чисел (1, 2)
-            patterns = [
-                r'(\d+(?:\.\d+)?)\s*черга',
-                r'черга[:\s]+(\d+(?:\.\d+)?)',
-                r'група[:\s]+(\d+(?:\.\d+)?)',
-                r'group[:\s]+(\d+(?:\.\d+)?)',
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, page_content, re.IGNORECASE)
-                if match:
-                    queue_number = match.group(1)
-                    logger.info("Знайдено номер черги через патерн '%s': %s", pattern, queue_number)
-                    return queue_number
-        except Exception as e:
-            logger.error("Помилка пошуку номера черги в контенті сторінки: %s", e)
-        
-        logger.warning("Не вдалось знайти номер черги")
-        return "невідомо"
+            logger.warning("Не вдалось знайти номер черги")
+            return "невідомо"
+        finally:
+            # Видалити обробник відповідей, щоб уникнути витоку пам'яті
+            page.remove_listener("response", handle_response)
         
     except Exception as e:
         logger.error("Помилка при заповненні форми та отриманні черги: %s", e)

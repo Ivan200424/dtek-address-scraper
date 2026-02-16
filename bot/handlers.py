@@ -26,6 +26,7 @@ from database.models import (
 )
 from parsers.base_parser import BaseParser
 from services.address_matcher import AddressMatcher
+from services.queue_checker import get_queue_number
 from utils.helpers import (
     escape_html,
     format_datetime,
@@ -193,6 +194,21 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context, region_key, full_address
     )
 
+    # Спробувати отримати номер черги
+    await update.message.reply_text("🔍 Перевіряю номер черги відключення...")
+    try:
+        queue_number = await get_queue_number(region_key, city, street, building)
+        context.user_data["queue_number"] = queue_number
+        
+        if queue_number and queue_number != "невідомо":
+            queue_info = f"🔢 Черга відключення: {queue_number}"
+        else:
+            queue_info = "🔢 Черга відключення: невідомо"
+    except Exception as e:
+        logger.error("Помилка отримання номера черги: %s", e)
+        queue_info = "🔢 Черга відключення: невідомо"
+        context.user_data["queue_number"] = "невідомо"
+
     await update.message.reply_text(
         messages.CONFIRM_ADDRESS.format(
             region_name=region_name,
@@ -200,6 +216,7 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             street=street,
             building=building,
             full_address=full_address,
+            queue_info=queue_info,
             outage_status=outage_status,
         ),
         reply_markup=keyboards.confirm_keyboard(),
@@ -278,6 +295,7 @@ async def confirm_address_handler(
     city = context.user_data.get("city", "")
     street = context.user_data.get("street", "")
     building = context.user_data.get("building", "")
+    queue_number = context.user_data.get("queue_number", None)
     full_address = f"{city}, {street}, {building}"
     normalized = BaseParser.normalize_address(full_address)
 
@@ -295,12 +313,13 @@ async def confirm_address_handler(
             building=building,
             full_address=full_address,
             normalized_address=normalized,
+            queue_number=queue_number,
         )
         await update.message.reply_text(
             messages.ADDRESS_SAVED,
             reply_markup=keyboards.main_menu_keyboard(),
         )
-        logger.info("Адресу збережено для користувача %s: %s", user.id, full_address)
+        logger.info("Адресу збережено для користувача %s: %s (черга: %s)", user.id, full_address, queue_number)
     except Exception as e:
         logger.error("Помилка збереження адреси: %s", e)
         await update.message.reply_text(messages.ERROR_MESSAGE)
@@ -347,7 +366,10 @@ async def my_addresses_handler(
         for i, addr in enumerate(addresses, 1):
             emoji = get_region_emoji(addr["region"])
             region_name = REGIONS.get(addr["region"], {}).get("name", addr["region"])
-            text += f"{i}. {emoji} {region_name}\n   📍 {addr['full_address']}\n\n"
+            queue_info = ""
+            if addr.get("queue_number"):
+                queue_info = f"\n   🔢 Черга: {addr['queue_number']}"
+            text += f"{i}. {emoji} {region_name}\n   📍 {addr['full_address']}{queue_info}\n\n"
 
         await update.message.reply_text(text)
     except Exception as e:

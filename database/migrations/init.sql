@@ -55,3 +55,11 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_outage_id ON notifications(outage_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_unique ON notifications(user_id, outage_id);
+
+-- Додати поле для номера черги
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='addresses' AND column_name='queue_number') THEN
+        ALTER TABLE addresses ADD COLUMN queue_number VARCHAR(20);
+    END IF;
+END $$;

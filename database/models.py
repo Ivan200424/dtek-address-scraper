@@ -72,17 +72,18 @@ async def add_address(
     building: str | None,
     full_address: str,
     normalized_address: str | None,
+    queue_number: str | None = None,
 ) -> Any:
     """Додати адресу користувача."""
     try:
         return await db.fetchrow(
             """
             INSERT INTO addresses
-                (user_id, region, city, street, building, full_address, normalized_address)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (user_id, region, city, street, building, full_address, normalized_address, queue_number)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
-            user_id, region, city, street, building, full_address, normalized_address,
+            user_id, region, city, street, building, full_address, normalized_address, queue_number,
         )
     except Exception as e:
         logger.error("Помилка додавання адреси: %s", e)
@@ -138,6 +139,21 @@ async def count_user_addresses(db: Database, user_id: int) -> int:
         )
     except Exception as e:
         logger.error("Помилка підрахунку адрес: %s", e)
+        raise
+
+
+async def update_address_queue(
+    db: Database, address_id: int, queue_number: str | None
+) -> bool:
+    """Оновити номер черги для адреси."""
+    try:
+        result = await db.execute(
+            "UPDATE addresses SET queue_number = $1 WHERE id = $2",
+            queue_number, address_id,
+        )
+        return result == "UPDATE 1"
+    except Exception as e:
+        logger.error("Помилка оновлення номера черги: %s", e)
         raise
 
 

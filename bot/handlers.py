@@ -351,11 +351,12 @@ async def my_addresses_handler(
         db_user = await get_user_by_chat_id(db, user.id)
         if not db_user:
             # Автоматично створити користувача якщо не існує
-            db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
-        
-        if not db_user:
-            await update.message.reply_text(messages.NO_ADDRESSES)
-            return
+            try:
+                db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
+            except Exception as e:
+                logger.error("Помилка створення користувача: %s", e)
+                await update.message.reply_text(messages.ERROR_MESSAGE)
+                return
 
         addresses = await get_user_addresses(db, db_user["id"])
         if not addresses:
@@ -482,11 +483,12 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         db_user = await get_user_by_chat_id(db, user.id)
         if not db_user:
             # Автоматично створити користувача якщо не існує
-            db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
-        
-        if not db_user:
-            await update.message.reply_text(messages.NO_ADDRESSES)
-            return
+            try:
+                db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
+            except Exception as e:
+                logger.error("Помилка створення користувача: %s", e)
+                await update.message.reply_text(messages.ERROR_MESSAGE)
+                return
 
         addresses = await get_user_addresses(db, db_user["id"])
         if not addresses:

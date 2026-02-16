@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
@@ -115,7 +116,7 @@ async def _extract_queue_for_region(
                 if street_input:
                     logger.info("Знайдено поле вулиці за селектором: %s", selector)
                     break
-            except:
+            except Exception:
                 continue
         
         if not street_input:
@@ -132,7 +133,7 @@ async def _extract_queue_for_region(
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
             await page.wait_for_timeout(1000)
-        except:
+        except Exception:
             pass
         
         # Знайти поле будинку
@@ -150,7 +151,7 @@ async def _extract_queue_for_region(
                 if building_input:
                     logger.info("Знайдено поле будинку за селектором: %s", selector)
                     break
-            except:
+            except Exception:
                 continue
         
         if building_input:
@@ -171,7 +172,7 @@ async def _extract_queue_for_region(
                 await page.click(selector, timeout=5000)
                 logger.info("Натиснуто кнопку пошуку за селектором: %s", selector)
                 break
-            except:
+            except Exception:
                 continue
         
         # Дочекатись результату
@@ -189,7 +190,6 @@ async def _extract_queue_for_region(
         page_text = await page.inner_text("body")
         
         # Шукати номер черги в тексті
-        import re
         for pattern in queue_patterns:
             # Шукаємо патерни типу "Черга: 1" або "Група 2" тощо
             match = re.search(rf"{pattern}[:\s]+(\d+)", page_text, re.IGNORECASE)

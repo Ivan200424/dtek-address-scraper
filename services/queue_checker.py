@@ -193,7 +193,7 @@ async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
     
     try:
         # Очікування та заповнення поля (використання type замість fill для емуляції набору)
-        await page.type(input_selector, value, delay=50)
+        await page.type(input_selector, value, delay=30)
         logger.info("Заповнено поле %s значенням: %s", field_name, value)
         
         # Очікування появи випадаючого списку автодоповнення
@@ -288,10 +288,10 @@ async def _fill_form_and_get_queue(
             
             # Спробувати знайти badge з номером черги на сторінці
             try:
-                queue_el = await page.query_selector("text=/[Чч]ерга\\s*\\d/")
+                queue_el = await page.query_selector("text=/[Чч]ерга\\s*\\d+/")
                 if queue_el:
                     text = await queue_el.text_content()
-                    match = re.search(r'(\d+\.?\d*)', text)
+                    match = re.search(r'[Чч]ерга\\s*(\\d+\\.?\\d*)', text)
                     if match:
                         queue_number = match.group(1)
                         logger.info("Знайдено номер черги через badge: %s", queue_number)

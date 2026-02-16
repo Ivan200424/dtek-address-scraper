@@ -17,6 +17,7 @@ from config.regions import REGIONS
 from database.connection import Database
 from database.models import (
     add_address,
+    add_address_without_queue,
     count_user_addresses,
     create_user,
     delete_address,
@@ -289,25 +290,12 @@ async def confirm_address_handler(
 ) -> int:
     """Підтвердження та збереження адреси."""
     user = update.effective_user
-    
-    # Безпечне отримання DB з обробкою помилок
-    try:
-        db = get_db(context)
-    except (KeyError, Exception) as e:
-        logger.error("Не вдалося отримати DB: %s", e, exc_info=True)
-        await update.message.reply_text(
-            "❌ Виникла помилка з базою даних. Спробуйте пізніше.",
-            reply_markup=keyboards.main_menu_keyboard(),
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
+    db = get_db(context)
 
-    # Перевірка наявності всіх необхідних даних у context.user_data
     required_keys = ["region", "city", "street", "building"]
-    
-    if any(key not in context.user_data for key in required_keys):
-        missing_keys = [key for key in required_keys if key not in context.user_data]
-        logger.error("Відсутні необхідні дані в context.user_data для користувача %s: %s", user.id, missing_keys)
+    missing_keys = [k for k in required_keys if k not in context.user_data]
+    if missing_keys:
+        logger.error("Відсутні дані user_data для %s: %s", user.id, missing_keys)
         await update.message.reply_text(
             "❌ Виникла помилка. Будь ласка, спробуйте додати адресу знову.",
             reply_markup=keyboards.main_menu_keyboard(),
@@ -320,18 +308,17 @@ async def confirm_address_handler(
     street = context.user_data["street"]
     building = context.user_data["building"]
     queue_number = context.user_data.get("queue_number", None)
-    
-    # Конвертувати "невідомо" в None перед збереженням
+
     if queue_number == "невідомо":
         queue_number = None
-    
+
     full_address = f"{city}, {street}, {building}"
     
-    # Безпечна нормалізація адреси з fallback
+    # Безпечна нормалізація
     try:
         normalized = BaseParser.normalize_address(full_address)
     except Exception as e:
-        logger.warning("Помилка нормалізації адреси '%s' для користувача %s: %s", full_address, user.id, e, exc_info=True)
+        logger.warning("Помилка нормалізації '%s': %s", full_address, e)
         normalized = full_address
 
     try:
@@ -339,24 +326,53 @@ async def confirm_address_handler(
         if not db_user:
             db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
 
-        await add_address(
-            db,
-            user_id=db_user["id"],
-            region=region_key,
-            city=city,
-            street=street,
-            building=building,
-            full_address=full_address,
-            normalized_address=normalized,
-            queue_number=queue_number,
-        )
+        # Спробувати зберегти з queue_number
+        try:
+            await add_address(
+                db,
+                user_id=db_user["id"],
+                region=region_key,
+                city=city,
+                street=street,
+                building=building,
+                full_address=full_address,
+                normalized_address=normalized,
+                queue_number=queue_number,
+            )
+        except Exception as insert_err:
+            # Fallback: зберегти без queue_number (якщо колонка не існує)
+            # Перевірити чи це помилка, пов'язана з колонкою queue_number
+            error_msg = str(insert_err).lower()
+            is_column_error = ('queue_number' in error_msg and 'column' in error_msg) or \
+                             ('queue_number' in error_msg and 'does not exist' in error_msg)
+            
+            if is_column_error:
+                logger.warning(
+                    "INSERT з queue_number не вдався (колонка відсутня): %s. Пробую без queue_number...",
+                    insert_err,
+                    exc_info=True
+                )
+                await add_address_without_queue(
+                    db,
+                    user_id=db_user["id"],
+                    region=region_key,
+                    city=city,
+                    street=street,
+                    building=building,
+                    full_address=full_address,
+                    normalized_address=normalized,
+                )
+            else:
+                # Інша помилка - пробросити далі
+                raise
+
         await update.message.reply_text(
             messages.ADDRESS_SAVED,
             reply_markup=keyboards.main_menu_keyboard(),
         )
-        logger.info("Адресу збережено для користувача %s: %s (черга: %s)", user.id, full_address, queue_number)
+        logger.info("Адресу збережено: user=%s, addr=%s, queue=%s", user.id, full_address, queue_number)
     except Exception as e:
-        logger.error("Помилка збереження адреси для користувача %s: %s", user.id, e, exc_info=True)
+        logger.error("Помилка збереження адреси для %s: %s", user.id, e, exc_info=True)
         await update.message.reply_text(
             "❌ Не вдалося зберегти адресу. Спробуйте ще раз.",
             reply_markup=keyboards.main_menu_keyboard(),

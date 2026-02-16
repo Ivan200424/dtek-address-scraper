@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS addresses (
     building VARCHAR(50),
     full_address TEXT NOT NULL,
     normalized_address TEXT,
+    queue_number VARCHAR(20),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

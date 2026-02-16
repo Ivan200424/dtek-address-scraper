@@ -1,5 +1,6 @@
--- Ініціалізація бази даних для бота моніторингу відключень ДТЕК
+-- Database initialization for DTEK power outage monitoring bot
 
+-- Users table
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     chat_id BIGINT UNIQUE NOT NULL,
@@ -10,6 +11,9 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE
 );
 
+CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users(chat_id);
+
+-- Addresses table (with queue_number in main CREATE TABLE)
 CREATE TABLE IF NOT EXISTS addresses (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -27,6 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_addresses_user_id ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_addresses_region ON addresses(region);
 CREATE INDEX IF NOT EXISTS idx_addresses_normalized ON addresses(normalized_address);
 
+-- Outages table
 CREATE TABLE IF NOT EXISTS outages (
     id SERIAL PRIMARY KEY,
     region VARCHAR(50) NOT NULL,
@@ -45,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_outages_region ON outages(region);
 CREATE INDEX IF NOT EXISTS idx_outages_created_at ON outages(created_at);
 CREATE INDEX IF NOT EXISTS idx_outages_type ON outages(outage_type);
 
+-- Notifications table
 CREATE TABLE IF NOT EXISTS notifications (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -56,11 +62,3 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_outage_id ON notifications(outage_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_unique ON notifications(user_id, outage_id);
-
--- Додати поле для номера черги
-DO $$ 
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='addresses' AND column_name='queue_number') THEN
-        ALTER TABLE addresses ADD COLUMN queue_number VARCHAR(20);
-    END IF;
-END $$;

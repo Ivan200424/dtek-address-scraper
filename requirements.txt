@@ -3,4 +3,3 @@ playwright==1.40.0
 asyncpg==0.29.0
 APScheduler==3.10.4
 python-dotenv==1.0.0
-tenacity==8.2.3

@@ -1,4 +1,4 @@
-"""Обробники команд Telegram-бота."""
+"""Bot command handlers."""
 
 import logging
 
@@ -13,11 +13,10 @@ from telegram.ext import (
 )
 
 from bot import keyboards, messages
-from config.regions import REGIONS
+from config.regions import REGIONS, REGION_EMOJIS
 from database.connection import Database
 from database.models import (
     add_address,
-    add_address_without_queue,
     count_user_addresses,
     create_user,
     delete_address,
@@ -25,38 +24,59 @@ from database.models import (
     get_user_addresses,
     get_user_by_chat_id,
 )
-from parsers.base_parser import BaseParser
-from services.address_matcher import AddressMatcher
+from parsers.dtek_parser import DtekParser
 from services.queue_checker import get_queue_number
-from utils.helpers import (
-    escape_html,
-    format_datetime,
-    get_region_emoji,
-    validate_building,
-    validate_city,
-    validate_street,
-)
 
 logger = logging.getLogger("bot.handlers")
 
-# Стани ConversationHandler для додавання адреси
+# Conversation states for address addition
 SELECT_REGION, ENTER_CITY, ENTER_STREET, ENTER_BUILDING, CONFIRM_ADDRESS = range(5)
 
 
 def get_db(context: ContextTypes.DEFAULT_TYPE) -> Database:
-    """Отримати об'єкт бази даних з контексту бота."""
+    """Get database from bot context."""
     return context.bot_data["db"]
 
 
 def get_max_addresses(context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отримати максимальну кількість адрес з контексту бота."""
+    """Get max addresses per user from bot context."""
     return context.bot_data.get("max_addresses", 10)
 
 
-# ===================== /start =====================
+# ==================== Helper Functions ====================
+
+def validate_city(city: str) -> bool:
+    """Validate city name has proper prefix."""
+    city_lower = city.lower().strip()
+    valid_prefixes = ["м. ", "с. ", "смт. ", "с-ще. "]
+    return any(city_lower.startswith(prefix) for prefix in valid_prefixes)
+
+
+def validate_street(street: str) -> bool:
+    """Validate street name has proper prefix."""
+    street_lower = street.lower().strip()
+    valid_prefixes = ["вул. ", "просп. ", "пров. ", "пл. ", "б-р. "]
+    return any(street_lower.startswith(prefix) for prefix in valid_prefixes)
+
+
+def validate_building(building: str) -> bool:
+    """Validate building number."""
+    # Allow numbers, letters, and common separators
+    import re
+    return bool(re.match(r'^[\dА-Яа-яA-Za-z\-/]+$', building.strip()))
+
+
+def format_datetime(dt) -> str:
+    """Format datetime for display."""
+    if dt is None:
+        return "—"
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+
+# ==================== Command Handlers ====================
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробник команди /start."""
+    """Handle /start command."""
     user = update.effective_user
     db = get_db(context)
 
@@ -68,9 +88,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             first_name=user.first_name,
             last_name=user.last_name,
         )
-        logger.info("Користувач %s (%s) почав роботу з ботом", user.id, user.username)
+        logger.info("User %s (%s) started bot", user.id, user.username)
     except Exception as e:
-        logger.error("Помилка збереження користувача: %s", e)
+        logger.error("Error creating user: %s", e)
 
     await update.message.reply_text(
         messages.WELCOME_MESSAGE,
@@ -78,17 +98,15 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-# ===================== /help =====================
-
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробник команди /help."""
+    """Handle /help command."""
     await update.message.reply_text(messages.HELP_MESSAGE)
 
 
-# ===================== /add_address (ConversationHandler) =====================
+# ==================== Add Address Conversation ====================
 
 async def add_address_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Початок додавання адреси — перевірити ліміт та показати регіони."""
+    """Start add address conversation."""
     user = update.effective_user
     db = get_db(context)
     max_addr = get_max_addresses(context)
@@ -103,7 +121,7 @@ async def add_address_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 )
                 return ConversationHandler.END
     except Exception as e:
-        logger.error("Помилка перевірки ліміту адрес: %s", e)
+        logger.error("Error checking address limit: %s", e)
 
     await update.message.reply_text(
         messages.SELECT_REGION,
@@ -113,7 +131,7 @@ async def add_address_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка вибору регіону."""
+    """Handle region selection."""
     query = update.callback_query
     await query.answer()
 
@@ -125,7 +143,7 @@ async def region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data["region"] = region_key
     region_name = REGIONS[region_key]["name"]
 
-    # Для Києва пропускаємо етап міста
+    # For Kyiv, skip city entry
     if region_key == "kyiv":
         context.user_data["city"] = "м. Київ"
         await query.edit_message_text(
@@ -140,7 +158,7 @@ async def region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def city_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка введення міста."""
+    """Handle city entry."""
     city = update.message.text.strip()
 
     if city == "❌ Скасувати":
@@ -156,7 +174,7 @@ async def city_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def street_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка введення вулиці."""
+    """Handle street entry."""
     street = update.message.text.strip()
 
     if street == "❌ Скасувати":
@@ -172,7 +190,7 @@ async def street_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка введення номера будинку — показати підсумок з інформацією про відключення."""
+    """Handle building entry and show confirmation."""
     building = update.message.text.strip()
 
     if building == "❌ Скасувати":
@@ -188,27 +206,24 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     city = context.user_data["city"]
     street = context.user_data["street"]
     region_name = REGIONS[region_key]["name"]
-    full_address = f"{city}, {street}, {building}"
 
-    # Перевірити поточні відключення за цією адресою
-    outage_status = await _check_address_outages(
-        context, region_key, full_address
-    )
+    # Check for current outages
+    outage_status = await _check_address_outages(context, region_key, city, street, building)
 
-    # Спробувати отримати номер черги
+    # Get queue number using AJAX approach
     await update.message.reply_text("🔍 Перевіряю номер черги відключення...")
     try:
         queue_number = await get_queue_number(region_key, city, street, building)
         context.user_data["queue_number"] = queue_number
-        
+
         if queue_number and queue_number != "невідомо":
             queue_info = f"🔢 Черга відключення: {queue_number}"
         else:
             queue_info = "🔢 Черга відключення: невідомо"
     except Exception as e:
-        logger.error("Помилка отримання номера черги: %s", e)
+        logger.error("Error getting queue number: %s", e, exc_info=True)
         queue_info = "🔢 Черга відключення: невідомо"
-        context.user_data["queue_number"] = "невідомо"
+        context.user_data["queue_number"] = None
 
     await update.message.reply_text(
         messages.CONFIRM_ADDRESS.format(
@@ -216,7 +231,6 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             city=city,
             street=street,
             building=building,
-            full_address=full_address,
             queue_info=queue_info,
             outage_status=outage_status,
         ),
@@ -228,30 +242,26 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def _check_address_outages(
     context: ContextTypes.DEFAULT_TYPE,
     region_key: str,
-    full_address: str,
+    city: str,
+    street: str,
+    building: str,
 ) -> str:
-    """Перевірити поточні відключення для адреси.
-
-    Args:
-        context: Контекст бота.
-        region_key: Ключ регіону.
-        full_address: Повна адреса.
-
-    Returns:
-        Текст зі статусом відключень.
-    """
+    """Check current outages for address."""
     db = get_db(context)
-    normalized = BaseParser.normalize_address(full_address)
+    full_address = f"{city}, {street}, {building}"
+    normalized = DtekParser.normalize_address(full_address)
 
     try:
         outages = await get_active_outages(db, region_key)
         if not outages:
             return messages.OUTAGE_STATUS_NONE
 
+        # Simple matching - check if street is mentioned in affected area
         matching_outages = []
-        matcher = AddressMatcher()
         for outage in outages:
-            if matcher.check_match(normalized, outage["affected_area"]):
+            affected_lower = outage["affected_area"].lower()
+            street_lower = street.lower()
+            if street_lower in affected_lower:
                 matching_outages.append(outage)
 
         if not matching_outages:
@@ -270,32 +280,35 @@ async def _check_address_outages(
                 emoji = "⚪"
                 type_text = outage_type
 
-            items.append(messages.OUTAGE_STATUS_ITEM.format(
-                emoji=emoji,
-                outage_type=type_text,
-                start_time=format_datetime(outage.get("start_time")),
-                end_time=format_datetime(outage.get("end_time")),
-            ))
+            items.append(
+                messages.OUTAGE_STATUS_ITEM.format(
+                    emoji=emoji,
+                    outage_type=type_text,
+                    start_time=format_datetime(outage.get("start_time")),
+                    end_time=format_datetime(outage.get("end_time")),
+                )
+            )
 
-        return messages.OUTAGE_STATUS_INFO.format(
-            outages_list="\n".join(items)
-        )
+        return messages.OUTAGE_STATUS_INFO.format(outages_list="\n".join(items))
+
     except Exception as e:
-        logger.error("Помилка перевірки відключень для адреси: %s", e)
+        logger.error("Error checking outages: %s", e)
         return messages.OUTAGE_STATUS_NONE
 
 
 async def confirm_address_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Підтвердження та збереження адреси."""
+    """Confirm and save address - FIXED VERSION."""
     user = update.effective_user
     db = get_db(context)
 
+    # Ensure all required data is in user_data
     required_keys = ["region", "city", "street", "building"]
     missing_keys = [k for k in required_keys if k not in context.user_data]
+    
     if missing_keys:
-        logger.error("Відсутні дані user_data для %s: %s", user.id, missing_keys)
+        logger.error("Missing user_data keys for user %s: %s", user.id, missing_keys)
         await update.message.reply_text(
             "❌ Виникла помилка. Будь ласка, спробуйте додати адресу знову.",
             reply_markup=keyboards.main_menu_keyboard(),
@@ -303,87 +316,68 @@ async def confirm_address_handler(
         context.user_data.clear()
         return ConversationHandler.END
 
+    # Extract data from context.user_data
     region_key = context.user_data["region"]
     city = context.user_data["city"]
     street = context.user_data["street"]
     building = context.user_data["building"]
-    queue_number = context.user_data.get("queue_number", None)
+    queue_number = context.user_data.get("queue_number")
 
-    if queue_number == "невідомо":
+    # Handle "невідомо" case
+    if queue_number == "невідомо" or not queue_number:
         queue_number = None
 
     full_address = f"{city}, {street}, {building}"
     
-    # Безпечна нормалізація
+    # Normalize address
     try:
-        normalized = BaseParser.normalize_address(full_address)
+        normalized = DtekParser.normalize_address(full_address)
     except Exception as e:
-        logger.warning("Помилка нормалізації '%s': %s", full_address, e)
-        normalized = full_address
+        logger.warning("Error normalizing address '%s': %s", full_address, e)
+        normalized = full_address.lower()
 
     try:
+        # Get or create user
         db_user = await get_user_by_chat_id(db, user.id)
         if not db_user:
-            db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
-
-        # Спробувати зберегти з queue_number
-        try:
-            await add_address(
-                db,
-                user_id=db_user["id"],
-                region=region_key,
-                city=city,
-                street=street,
-                building=building,
-                full_address=full_address,
-                normalized_address=normalized,
-                queue_number=queue_number,
+            db_user = await create_user(
+                db, user.id, user.username, user.first_name, user.last_name
             )
-        except Exception as insert_err:
-            # Fallback: зберегти без queue_number (якщо колонка не існує)
-            # Перевірити чи це помилка, пов'язана з колонкою queue_number
-            error_msg = str(insert_err).lower()
-            is_column_error = ('queue_number' in error_msg and 'column' in error_msg) or \
-                             ('queue_number' in error_msg and 'does not exist' in error_msg)
-            
-            if is_column_error:
-                logger.warning(
-                    "INSERT з queue_number не вдався (колонка відсутня): %s. Пробую без queue_number...",
-                    insert_err,
-                    exc_info=True
-                )
-                await add_address_without_queue(
-                    db,
-                    user_id=db_user["id"],
-                    region=region_key,
-                    city=city,
-                    street=street,
-                    building=building,
-                    full_address=full_address,
-                    normalized_address=normalized,
-                )
-            else:
-                # Інша помилка - пробросити далі
-                raise
+
+        # Save address with queue_number
+        await add_address(
+            db,
+            user_id=db_user["id"],
+            region=region_key,
+            city=city,
+            street=street,
+            building=building,
+            full_address=full_address,
+            normalized_address=normalized,
+            queue_number=queue_number,
+        )
 
         await update.message.reply_text(
             messages.ADDRESS_SAVED,
             reply_markup=keyboards.main_menu_keyboard(),
         )
-        logger.info("Адресу збережено: user=%s, addr=%s, queue=%s", user.id, full_address, queue_number)
+        logger.info("Address saved: user=%s, addr=%s, queue=%s", 
+                   user.id, full_address, queue_number)
+
     except Exception as e:
-        logger.error("Помилка збереження адреси для %s: %s", user.id, e, exc_info=True)
+        logger.error("Error saving address for user %s: %s", user.id, e, exc_info=True)
         await update.message.reply_text(
             "❌ Не вдалося зберегти адресу. Спробуйте ще раз.",
             reply_markup=keyboards.main_menu_keyboard(),
         )
 
+    # Always clear user_data at the end
     context.user_data.clear()
     return ConversationHandler.END
 
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Скасування операції."""
+    """Cancel conversation."""
     context.user_data.clear()
     await update.message.reply_text(
         messages.OPERATION_CANCELLED,
@@ -392,23 +386,25 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 
-# ===================== /my_addresses =====================
+# ==================== My Addresses ====================
 
 async def my_addresses_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обробник команди /my_addresses — список адрес."""
+    """Handle /my_addresses command."""
     user = update.effective_user
     db = get_db(context)
 
     try:
         db_user = await get_user_by_chat_id(db, user.id)
         if not db_user:
-            # Автоматично створити користувача якщо не існує
+            # Create user if not exists
             try:
-                db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
+                db_user = await create_user(
+                    db, user.id, user.username, user.first_name, user.last_name
+                )
             except Exception as e:
-                logger.error("Помилка створення користувача: %s", e)
+                logger.error("Error creating user: %s", e)
                 await update.message.reply_text(messages.ERROR_MESSAGE)
                 return
 
@@ -419,7 +415,7 @@ async def my_addresses_handler(
 
         text = "📋 Ваші адреси:\n\n"
         for i, addr in enumerate(addresses, 1):
-            emoji = get_region_emoji(addr["region"])
+            emoji = REGION_EMOJIS.get(addr["region"], "📍")
             region_name = REGIONS.get(addr["region"], {}).get("name", addr["region"])
             queue_info = ""
             if addr.get("queue_number"):
@@ -427,17 +423,18 @@ async def my_addresses_handler(
             text += f"{i}. {emoji} {region_name}\n   📍 {addr['full_address']}{queue_info}\n\n"
 
         await update.message.reply_text(text)
+
     except Exception as e:
-        logger.error("Помилка отримання адрес: %s", e)
+        logger.error("Error getting addresses: %s", e)
         await update.message.reply_text(messages.ERROR_MESSAGE)
 
 
-# ===================== /delete_address =====================
+# ==================== Delete Address ====================
 
 async def delete_address_start(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Показати список адрес для видалення."""
+    """Show list of addresses for deletion."""
     user = update.effective_user
     db = get_db(context)
 
@@ -456,15 +453,16 @@ async def delete_address_start(
             messages.SELECT_ADDRESS_TO_DELETE,
             reply_markup=keyboards.addresses_keyboard(addresses),
         )
+
     except Exception as e:
-        logger.error("Помилка отримання адрес для видалення: %s", e)
+        logger.error("Error getting addresses for deletion: %s", e)
         await update.message.reply_text(messages.ERROR_MESSAGE)
 
 
 async def delete_address_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обробка натискання на адресу для видалення — запитати підтвердження."""
+    """Handle address deletion request."""
     query = update.callback_query
     await query.answer()
 
@@ -487,14 +485,15 @@ async def delete_address_callback(
             messages.CONFIRM_DELETE.format(address=addr["full_address"]),
             reply_markup=keyboards.confirm_delete_keyboard(address_id),
         )
+
     except Exception as e:
-        logger.error("Помилка підготовки видалення: %s", e)
+        logger.error("Error preparing deletion: %s", e)
 
 
 async def confirm_delete_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Підтвердження видалення адреси."""
+    """Confirm address deletion."""
     query = update.callback_query
     await query.answer()
 
@@ -512,35 +511,38 @@ async def confirm_delete_callback(
             await query.edit_message_text(messages.DELETE_CONFIRMED)
         else:
             await query.edit_message_text("❌ Не вдалося видалити адресу.")
+
     except Exception as e:
-        logger.error("Помилка видалення адреси: %s", e)
+        logger.error("Error deleting address: %s", e)
         await query.edit_message_text(messages.ERROR_MESSAGE)
 
 
 async def cancel_delete_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Скасування видалення адреси."""
+    """Cancel address deletion."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(messages.DELETE_CANCELLED)
 
 
-# ===================== /status =====================
+# ==================== Status ====================
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обробник команди /status — перевірити поточні відключення."""
+    """Handle /status command."""
     user = update.effective_user
     db = get_db(context)
 
     try:
         db_user = await get_user_by_chat_id(db, user.id)
         if not db_user:
-            # Автоматично створити користувача якщо не існує
+            # Create user if not exists
             try:
-                db_user = await create_user(db, user.id, user.username, user.first_name, user.last_name)
+                db_user = await create_user(
+                    db, user.id, user.username, user.first_name, user.last_name
+                )
             except Exception as e:
-                logger.error("Помилка створення користувача: %s", e)
+                logger.error("Error creating user: %s", e)
                 await update.message.reply_text(messages.ERROR_MESSAGE)
                 return
 
@@ -549,7 +551,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(messages.NO_ADDRESSES)
             return
 
-        # Зібрати унікальні регіони
+        # Get unique regions
         user_regions = set(addr["region"] for addr in addresses)
         has_outages = False
         text = messages.STATUS_HEADER
@@ -559,12 +561,12 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if outages:
                 has_outages = True
                 region_name = REGIONS.get(region_key, {}).get("name", region_key)
-                emoji = get_region_emoji(region_key)
+                emoji = REGION_EMOJIS.get(region_key, "📍")
                 text += f"\n{emoji} {region_name}:\n"
                 for outage in outages:
                     outage_emoji = "🔴" if outage["outage_type"] == "emergency" else "🟡"
                     text += (
-                        f"  {outage_emoji} {escape_html(outage['affected_area'])}\n"
+                        f"  {outage_emoji} {outage['affected_area']}\n"
                         f"  ⏰ {format_datetime(outage['start_time'])} — "
                         f"{format_datetime(outage['end_time'])}\n\n"
                     )
@@ -573,17 +575,18 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(messages.STATUS_NO_OUTAGES)
         else:
             await update.message.reply_text(text)
+
     except Exception as e:
-        logger.error("Помилка перевірки статусу: %s", e)
+        logger.error("Error checking status: %s", e)
         await update.message.reply_text(messages.ERROR_MESSAGE)
 
 
-# ===================== Текстові кнопки меню =====================
+# ==================== Menu Text Handlers ====================
 
 async def menu_text_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Обробка текстових кнопок головного меню (крім 'Додати адресу')."""
+    """Handle main menu text buttons."""
     text = update.message.text
 
     if text == "📋 Мої адреси":
@@ -596,12 +599,12 @@ async def menu_text_handler(
         await help_handler(update, context)
 
 
-# ===================== Menu interrupt handlers (для ConversationHandler fallbacks) =====================
+# ==================== Menu Interrupt Handlers ====================
 
 async def menu_interrupt_my_addresses(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Обробка кнопки 'Мої адреси' під час conversation — очистити стан і показати адреси."""
+    """Handle My Addresses button during conversation."""
     context.user_data.clear()
     await my_addresses_handler(update, context)
     return ConversationHandler.END
@@ -610,7 +613,7 @@ async def menu_interrupt_my_addresses(
 async def menu_interrupt_status(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Обробка кнопки 'Перевірити статус' під час conversation — очистити стан і показати статус."""
+    """Handle Status button during conversation."""
     context.user_data.clear()
     await status_handler(update, context)
     return ConversationHandler.END
@@ -619,7 +622,7 @@ async def menu_interrupt_status(
 async def menu_interrupt_help(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Обробка кнопки 'Допомога' під час conversation — очистити стан і показати допомогу."""
+    """Handle Help button during conversation."""
     context.user_data.clear()
     await help_handler(update, context)
     return ConversationHandler.END
@@ -628,17 +631,17 @@ async def menu_interrupt_help(
 async def menu_interrupt_delete_address(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Обробка кнопки 'Видалити адресу' під час conversation — очистити стан і показати список адрес."""
+    """Handle Delete Address button during conversation."""
     context.user_data.clear()
     await delete_address_start(update, context)
     return ConversationHandler.END
 
 
-# ===================== Error handler =====================
+# ==================== Error Handler ====================
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Глобальний обробник помилок."""
-    logger.error("Помилка при обробці оновлення: %s", context.error)
+    """Global error handler."""
+    logger.error("Error handling update: %s", context.error, exc_info=context.error)
     if update and hasattr(update, "effective_message") and update.effective_message:
         try:
             await update.effective_message.reply_text(messages.ERROR_MESSAGE)
@@ -646,15 +649,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             pass
 
 
-# ===================== Реєстрація handlers =====================
+# ==================== Handler Registration ====================
 
 def register_handlers(app) -> None:
-    """Зареєструвати всі обробники команд.
-
+    """Register all bot handlers.
+    
     Args:
-        app: Application з python-telegram-bot.
+        app: Telegram Application instance
     """
-    # ConversationHandler для додавання адреси
+    # Add address conversation handler
     add_address_conv = ConversationHandler(
         entry_points=[
             CommandHandler("add_address", add_address_start),
@@ -666,26 +669,26 @@ def register_handlers(app) -> None:
             ],
             ENTER_CITY: [
                 MessageHandler(
-                    filters.TEXT 
-                    & ~filters.COMMAND 
+                    filters.TEXT
+                    & ~filters.COMMAND
                     & ~filters.Regex(r"^(📋 Мої адреси|🔍 Перевірити статус|❓ Допомога|📍 Додати адресу|🗑 Видалити адресу)$"),
-                    city_entered
+                    city_entered,
                 ),
             ],
             ENTER_STREET: [
                 MessageHandler(
-                    filters.TEXT 
-                    & ~filters.COMMAND 
+                    filters.TEXT
+                    & ~filters.COMMAND
                     & ~filters.Regex(r"^(📋 Мої адреси|🔍 Перевірити статус|❓ Допомога|📍 Додати адресу|🗑 Видалити адресу)$"),
-                    street_entered
+                    street_entered,
                 ),
             ],
             ENTER_BUILDING: [
                 MessageHandler(
-                    filters.TEXT 
-                    & ~filters.COMMAND 
+                    filters.TEXT
+                    & ~filters.COMMAND
                     & ~filters.Regex(r"^(📋 Мої адреси|🔍 Перевірити статус|❓ Допомога|📍 Додати адресу|🗑 Видалити адресу)$"),
-                    building_entered
+                    building_entered,
                 ),
             ],
             CONFIRM_ADDRESS: [
@@ -695,7 +698,7 @@ def register_handlers(app) -> None:
         fallbacks=[
             CommandHandler("cancel", cancel_handler),
             MessageHandler(filters.Regex("^❌ Скасувати$"), cancel_handler),
-            # Обробка кнопок меню — завершити розмову і виконати дію
+            # Menu interrupts
             MessageHandler(filters.Regex("^📋 Мої адреси$"), menu_interrupt_my_addresses),
             MessageHandler(filters.Regex("^🔍 Перевірити статус$"), menu_interrupt_status),
             MessageHandler(filters.Regex("^❓ Допомога$"), menu_interrupt_help),
@@ -704,7 +707,7 @@ def register_handlers(app) -> None:
         per_message=False,
     )
 
-    # Реєстрація обробників
+    # Register handlers
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(add_address_conv)
@@ -712,18 +715,19 @@ def register_handlers(app) -> None:
     app.add_handler(CommandHandler("delete_address", delete_address_start))
     app.add_handler(CommandHandler("status", status_handler))
 
-    # Callback handlers для видалення адрес
+    # Callback handlers for address deletion
     app.add_handler(CallbackQueryHandler(delete_address_callback, pattern=r"^delete_\d+$"))
     app.add_handler(CallbackQueryHandler(confirm_delete_callback, pattern=r"^confirm_del_\d+$"))
     app.add_handler(CallbackQueryHandler(cancel_delete_callback, pattern=r"^cancel_delete$"))
 
-    # Текстові кнопки меню (крім "Додати адресу" — обробляється в ConversationHandler)
-    app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(
-            r"^(📋 Мої адреси|🔍 Перевірити статус|🗑 Видалити адресу|❓ Допомога)$"
-        ),
-        menu_text_handler,
-    ))
+    # Menu text button handler
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & filters.Regex(r"^(📋 Мої адреси|🔍 Перевірити статус|🗑 Видалити адресу|❓ Допомога)$"),
+            menu_text_handler,
+        )
+    )
 
-    # Глобальний обробник помилок
+    # Global error handler
     app.add_error_handler(error_handler)

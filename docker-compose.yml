@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: dtek-bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - DATABASE_URL=postgresql://dtek:dtek_password@db:5432/dtek_bot
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-300}
+      - MAX_ADDRESSES_PER_USER=${MAX_ADDRESSES_PER_USER:-10}
+      - TZ=Europe/Kyiv
+    depends_on:
+      - db
+    networks:
+      - dtek-network
+
+  db:
+    image: postgres:15-alpine
+    container_name: dtek-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=dtek_bot
+      - POSTGRES_USER=dtek
+      - POSTGRES_PASSWORD=dtek_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - dtek-network
+
+networks:
+  dtek-network:
+    driver: bridge
+
+volumes:
+  postgres-data:

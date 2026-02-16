@@ -1,61 +1,39 @@
-"""Налаштування бота — завантаження змінних оточення."""
+"""Settings configuration using environment variables."""
 
 import os
-from dataclasses import dataclass
+from pathlib import Path
+
 from dotenv import load_dotenv
 
+# Load environment variables from .env
 load_dotenv()
 
 
-@dataclass
 class Settings:
-    """Клас налаштувань бота з валідацією."""
+    """Application settings loaded from environment variables."""
 
-    TELEGRAM_BOT_TOKEN: str
-    DATABASE_URL: str | None
-    DB_HOST: str
-    DB_PORT: int
-    DB_NAME: str
-    DB_USER: str
-    DB_PASSWORD: str
-    CHECK_INTERVAL: int
-    LOG_LEVEL: str
-    TZ: str
-    MAX_ADDRESSES_PER_USER: int
-    BROWSER_TIMEOUT: int
+    # Telegram Bot
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-    def __init__(self) -> None:
-        """Ініціалізація налаштувань з змінних оточення."""
-        self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        if not self.TELEGRAM_BOT_TOKEN:
-            raise ValueError("TELEGRAM_BOT_TOKEN є обов'язковим! Вкажіть його в .env файлі.")
+    # Database
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL", "postgresql://user:password@localhost:5432/dtek_bot"
+    )
+    DB_POOL_MIN_SIZE: int = int(os.getenv("DB_POOL_MIN_SIZE", "2"))
+    DB_POOL_MAX_SIZE: int = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
 
-        # Параметри PostgreSQL
-        self.DATABASE_URL = os.getenv("DATABASE_URL")
-        self.DB_HOST = os.getenv("DB_HOST", "localhost")
-        self.DB_PORT = int(os.getenv("DB_PORT", "5432"))
-        self.DB_NAME = os.getenv("DB_NAME", "power_outage_bot")
-        self.DB_USER = os.getenv("DB_USER", "postgres")
-        self.DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+    # Monitoring
+    CHECK_INTERVAL: int = int(os.getenv("CHECK_INTERVAL", "300"))  # 5 minutes
+    MAX_ADDRESSES_PER_USER: int = int(os.getenv("MAX_ADDRESSES_PER_USER", "10"))
 
-        # Моніторинг
-        self.CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
-        # Логування
-        self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    # Timezone
+    TZ: str = os.getenv("TZ", "Europe/Kyiv")
 
-        # Часова зона
-        self.TZ = os.getenv("TZ", "Europe/Kiev")
+    # Playwright
+    PLAYWRIGHT_TIMEOUT: int = int(os.getenv("PLAYWRIGHT_TIMEOUT", "60000"))  # 60 seconds
 
-        # Ліміти
-        self.MAX_ADDRESSES_PER_USER = int(os.getenv("MAX_ADDRESSES_PER_USER", "10"))
-        self.BROWSER_TIMEOUT = int(os.getenv("BROWSER_TIMEOUT", "30"))
 
-    def get_database_url(self) -> str:
-        """Отримати URL підключення до бази даних."""
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
-        return (
-            f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-        )
+settings = Settings()

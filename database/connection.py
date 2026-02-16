@@ -1,108 +1,54 @@
-"""Підключення до бази даних PostgreSQL через asyncpg."""
+"""Database connection and pool management."""
 
 import logging
-import os
-from typing import Any
+from typing import Optional
 
 import asyncpg
 
-from config.settings import Settings
+from config.settings import settings
 
-logger = logging.getLogger("database")
+logger = logging.getLogger("database.connection")
 
 
 class Database:
-    """Клас для роботи з PostgreSQL через asyncpg connection pool."""
+    """PostgreSQL database connection pool manager."""
 
-    def __init__(self, settings: Settings) -> None:
-        """Ініціалізація з налаштуваннями."""
-        self.settings = settings
-        self.pool: asyncpg.Pool | None = None
+    def __init__(self):
+        """Initialize database manager."""
+        self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
-        """Створити connection pool через asyncpg."""
+        """Create database connection pool."""
         try:
-            if self.settings.DATABASE_URL:
-                self.pool = await asyncpg.create_pool(
-                    dsn=self.settings.DATABASE_URL,
-                    min_size=2,
-                    max_size=10,
-                )
-            else:
-                self.pool = await asyncpg.create_pool(
-                    host=self.settings.DB_HOST,
-                    port=self.settings.DB_PORT,
-                    database=self.settings.DB_NAME,
-                    user=self.settings.DB_USER,
-                    password=self.settings.DB_PASSWORD,
-                    min_size=2,
-                    max_size=10,
-                )
-            logger.info("Підключення до БД встановлено")
+            self.pool = await asyncpg.create_pool(
+                dsn=settings.DATABASE_URL,
+                min_size=settings.DB_POOL_MIN_SIZE,
+                max_size=settings.DB_POOL_MAX_SIZE,
+            )
+            logger.info("Database connection pool created")
         except Exception as e:
-            logger.error("Помилка підключення до БД: %s", e)
+            logger.error("Failed to create database pool: %s", e)
             raise
 
     async def disconnect(self) -> None:
-        """Закрити connection pool."""
+        """Close database connection pool."""
         if self.pool:
             await self.pool.close()
-            logger.info("Підключення до БД закрито")
-
-    async def execute(self, query: str, *args: Any) -> str:
-        """Виконати запит без повернення результату."""
-        async with self.pool.acquire() as conn:
-            return await conn.execute(query, *args)
-
-    async def fetch(self, query: str, *args: Any) -> list[asyncpg.Record]:
-        """Виконати запит і повернути всі рядки."""
-        async with self.pool.acquire() as conn:
-            return await conn.fetch(query, *args)
-
-    async def fetchrow(self, query: str, *args: Any) -> asyncpg.Record | None:
-        """Виконати запит і повернути один рядок."""
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(query, *args)
-
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        """Виконати запит і повернути одне значення."""
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval(query, *args)
+            logger.info("Database connection pool closed")
 
     async def init_tables(self) -> None:
-        """Виконати init.sql для створення таблиць."""
-        sql_path = os.path.join(
-            os.path.dirname(__file__), "migrations", "init.sql"
-        )
+        """Initialize database tables from migration file."""
+        if not self.pool:
+            raise RuntimeError("Database not connected")
+
         try:
-            with open(sql_path, "r", encoding="utf-8") as f:
+            # Read and execute init.sql
+            with open("database/migrations/init.sql", "r", encoding="utf-8") as f:
                 sql = f.read()
+
             async with self.pool.acquire() as conn:
                 await conn.execute(sql)
-            logger.info("Таблиці БД ініціалізовано")
-            
-            # Переконатися що колонка queue_number існує
-            await self.ensure_queue_column()
+                logger.info("Database tables initialized")
         except Exception as e:
-            logger.error("Помилка ініціалізації таблиць: %s", e)
+            logger.error("Failed to initialize tables: %s", e)
             raise
-
-    async def ensure_queue_column(self) -> None:
-        """Переконатися що колонка queue_number існує."""
-        try:
-            async with self.pool.acquire() as conn:
-                exists = await conn.fetchval(
-                    """
-                    SELECT EXISTS(
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name='addresses' AND column_name='queue_number'
-                    )
-                    """
-                )
-                if not exists:
-                    await conn.execute(
-                        "ALTER TABLE addresses ADD COLUMN queue_number VARCHAR(20)"
-                    )
-                    logger.info("Колонку queue_number додано до таблиці addresses")
-        except Exception as e:
-            logger.warning("Помилка перевірки/додавання колонки queue_number: %s", e)

@@ -1,306 +1,373 @@
-"""CRUD операції з базою даних."""
+"""Database models and CRUD operations."""
 
-import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from database.connection import Database
 
 logger = logging.getLogger("database.models")
 
 
-# ===================== Users =====================
+# ==================== Users ====================
 
 async def create_user(
     db: Database,
     chat_id: int,
-    username: str | None = None,
-    first_name: str | None = None,
-    last_name: str | None = None,
-) -> Any:
-    """Створити або оновити користувача (INSERT ... ON CONFLICT DO UPDATE)."""
-    try:
-        return await db.fetchrow(
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create or update user in database.
+    
+    Args:
+        db: Database connection
+        chat_id: Telegram chat ID
+        username: Telegram username
+        first_name: User's first name
+        last_name: User's last name
+        
+    Returns:
+        User record as dict
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetchrow(
             """
             INSERT INTO users (chat_id, username, first_name, last_name)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (chat_id) DO UPDATE SET
-                username = EXCLUDED.username,
-                first_name = EXCLUDED.first_name,
-                last_name = EXCLUDED.last_name,
-                is_active = TRUE
+            ON CONFLICT (chat_id) DO UPDATE 
+            SET username = $2, first_name = $3, last_name = $4
             RETURNING *
             """,
-            chat_id, username, first_name, last_name,
+            chat_id,
+            username,
+            first_name,
+            last_name,
         )
-    except Exception as e:
-        logger.error("Помилка створення користувача: %s", e)
-        raise
 
 
-async def get_user_by_chat_id(db: Database, chat_id: int) -> Any:
-    """Отримати користувача за chat_id."""
-    try:
-        return await db.fetchrow(
-            "SELECT * FROM users WHERE chat_id = $1", chat_id
+async def get_user_by_chat_id(db: Database, chat_id: int) -> Optional[Dict[str, Any]]:
+    """Get user by Telegram chat ID.
+    
+    Args:
+        db: Database connection
+        chat_id: Telegram chat ID
+        
+    Returns:
+        User record or None
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM users WHERE chat_id = $1",
+            chat_id,
         )
-    except Exception as e:
-        logger.error("Помилка отримання користувача: %s", e)
-        raise
 
 
-async def deactivate_user(db: Database, chat_id: int) -> None:
-    """Деактивувати користувача."""
-    try:
-        await db.execute(
-            "UPDATE users SET is_active = FALSE WHERE chat_id = $1", chat_id
+async def get_all_active_users(db: Database) -> List[Dict[str, Any]]:
+    """Get all active users.
+    
+    Args:
+        db: Database connection
+        
+    Returns:
+        List of user records
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM users WHERE is_active = TRUE"
         )
-    except Exception as e:
-        logger.error("Помилка деактивації користувача: %s", e)
-        raise
 
 
-# ===================== Addresses =====================
+# ==================== Addresses ====================
 
 async def add_address(
     db: Database,
     user_id: int,
     region: str,
-    city: str | None,
+    city: str,
     street: str,
-    building: str | None,
+    building: str,
     full_address: str,
-    normalized_address: str | None,
-    queue_number: str | None = None,
-) -> Any:
-    """Додати адресу користувача."""
-    try:
-        return await db.fetchrow(
+    normalized_address: str,
+    queue_number: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Add new address for user.
+    
+    Args:
+        db: Database connection
+        user_id: User ID
+        region: Region key
+        city: City name
+        street: Street name
+        building: Building number
+        full_address: Full address string
+        normalized_address: Normalized address for matching
+        queue_number: Queue number (optional)
+        
+    Returns:
+        Address record as dict
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetchrow(
             """
-            INSERT INTO addresses
-                (user_id, region, city, street, building, full_address, normalized_address, queue_number)
+            INSERT INTO addresses (
+                user_id, region, city, street, building,
+                full_address, normalized_address, queue_number
+            )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
-            user_id, region, city, street, building, full_address, normalized_address, queue_number,
-        )
-    except Exception as e:
-        logger.error("Помилка додавання адреси: %s", e)
-        raise
-
-
-async def add_address_without_queue(
-    db: Database,
-    user_id: int,
-    region: str,
-    city: str | None,
-    street: str,
-    building: str | None,
-    full_address: str,
-    normalized_address: str | None,
-) -> Any:
-    """Додати адресу користувача без поля queue_number (fallback)."""
-    try:
-        return await db.fetchrow(
-            """
-            INSERT INTO addresses
-                (user_id, region, city, street, building, full_address, normalized_address)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *
-            """,
-            user_id, region, city, street, building, full_address, normalized_address,
-        )
-    except Exception as e:
-        logger.error("Помилка додавання адреси (fallback): %s", e)
-        raise
-
-
-async def get_user_addresses(db: Database, user_id: int) -> list[Any]:
-    """Отримати список адрес користувача."""
-    try:
-        return await db.fetch(
-            "SELECT * FROM addresses WHERE user_id = $1 ORDER BY created_at", user_id
-        )
-    except Exception as e:
-        logger.error("Помилка отримання адрес: %s", e)
-        raise
-
-
-async def delete_address(db: Database, address_id: int, user_id: int) -> bool:
-    """Видалити адресу (перевірити що належить цьому user_id)."""
-    try:
-        result = await db.execute(
-            "DELETE FROM addresses WHERE id = $1 AND user_id = $2",
-            address_id, user_id,
-        )
-        return result == "DELETE 1"
-    except Exception as e:
-        logger.error("Помилка видалення адреси: %s", e)
-        raise
-
-
-async def get_addresses_by_region(db: Database, region: str) -> list[Any]:
-    """Отримати всі адреси для регіону."""
-    try:
-        return await db.fetch(
-            """
-            SELECT a.*, u.chat_id
-            FROM addresses a
-            JOIN users u ON a.user_id = u.id
-            WHERE a.region = $1 AND u.is_active = TRUE
-            """,
+            user_id,
             region,
+            city,
+            street,
+            building,
+            full_address,
+            normalized_address,
+            queue_number,
         )
-    except Exception as e:
-        logger.error("Помилка отримання адрес за регіоном: %s", e)
-        raise
+
+
+async def get_user_addresses(db: Database, user_id: int) -> List[Dict[str, Any]]:
+    """Get all addresses for user.
+    
+    Args:
+        db: Database connection
+        user_id: User ID
+        
+    Returns:
+        List of address records
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT * FROM addresses 
+            WHERE user_id = $1 
+            ORDER BY created_at DESC
+            """,
+            user_id,
+        )
 
 
 async def count_user_addresses(db: Database, user_id: int) -> int:
-    """Кількість адрес користувача."""
-    try:
-        return await db.fetchval(
-            "SELECT COUNT(*) FROM addresses WHERE user_id = $1", user_id
+    """Count addresses for user.
+    
+    Args:
+        db: Database connection
+        user_id: User ID
+        
+    Returns:
+        Number of addresses
+    """
+    async with db.pool.acquire() as conn:
+        result = await conn.fetchval(
+            "SELECT COUNT(*) FROM addresses WHERE user_id = $1",
+            user_id,
         )
-    except Exception as e:
-        logger.error("Помилка підрахунку адрес: %s", e)
-        raise
+        return result or 0
+
+
+async def delete_address(db: Database, address_id: int, user_id: int) -> bool:
+    """Delete address.
+    
+    Args:
+        db: Database connection
+        address_id: Address ID
+        user_id: User ID (for security check)
+        
+    Returns:
+        True if deleted, False otherwise
+    """
+    async with db.pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            DELETE FROM addresses 
+            WHERE id = $1 AND user_id = $2
+            """,
+            address_id,
+            user_id,
+        )
+        return result == "DELETE 1"
 
 
 async def update_address_queue(
-    db: Database, address_id: int, queue_number: str | None
+    db: Database, address_id: int, queue_number: str
 ) -> bool:
-    """Оновити номер черги для адреси."""
-    try:
-        result = await db.execute(
-            "UPDATE addresses SET queue_number = $1 WHERE id = $2",
-            queue_number, address_id,
+    """Update queue number for address.
+    
+    Args:
+        db: Database connection
+        address_id: Address ID
+        queue_number: New queue number
+        
+    Returns:
+        True if updated, False otherwise
+    """
+    async with db.pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE addresses 
+            SET queue_number = $1 
+            WHERE id = $2
+            """,
+            queue_number,
+            address_id,
         )
         return result == "UPDATE 1"
-    except Exception as e:
-        logger.error("Помилка оновлення номера черги: %s", e)
-        raise
 
 
-# ===================== Outages =====================
+# ==================== Outages ====================
 
 async def create_outage(
     db: Database,
     region: str,
     outage_type: str,
     affected_area: str,
-    start_time: datetime | None = None,
-    end_time: datetime | None = None,
-    description: str | None = None,
-    source_url: str | None = None,
-    raw_data: dict | None = None,
-) -> Any:
-    """Створити запис про відключення."""
-    try:
-        raw_json = json.dumps(raw_data, ensure_ascii=False, default=str) if raw_data else None
-        return await db.fetchrow(
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    description: Optional[str] = None,
+    source_url: Optional[str] = None,
+    raw_data: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """Create new outage record.
+    
+    Args:
+        db: Database connection
+        region: Region key
+        outage_type: Type of outage (emergency, planned)
+        affected_area: Affected area description
+        start_time: Start time
+        end_time: End time
+        description: Outage description
+        source_url: Source URL
+        raw_data: Raw data as JSON
+        
+    Returns:
+        Outage record as dict
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetchrow(
             """
-            INSERT INTO outages
-                (region, outage_type, affected_area, start_time, end_time,
-                 description, source_url, raw_data)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+            INSERT INTO outages (
+                region, outage_type, affected_area,
+                start_time, end_time, description,
+                source_url, raw_data
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
-            region, outage_type, affected_area, start_time, end_time,
-            description, source_url, raw_json,
+            region,
+            outage_type,
+            affected_area,
+            start_time,
+            end_time,
+            description,
+            source_url,
+            raw_data,
         )
-    except Exception as e:
-        logger.error("Помилка створення запису відключення: %s", e)
-        raise
 
 
-async def get_active_outages(
-    db: Database, region: str | None = None
-) -> list[Any]:
-    """Отримати активні відключення (end_time > now або end_time IS NULL)."""
-    try:
-        if region:
-            return await db.fetch(
-                """
-                SELECT * FROM outages
-                WHERE region = $1
-                  AND (end_time > NOW() OR end_time IS NULL)
-                ORDER BY created_at DESC
-                """,
-                region,
-            )
-        return await db.fetch(
+async def get_active_outages(db: Database, region: str) -> List[Dict[str, Any]]:
+    """Get active outages for region.
+    
+    Args:
+        db: Database connection
+        region: Region key
+        
+    Returns:
+        List of outage records
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetch(
             """
-            SELECT * FROM outages
-            WHERE end_time > NOW() OR end_time IS NULL
-            ORDER BY created_at DESC
+            SELECT * FROM outages 
+            WHERE region = $1 
+            AND (end_time IS NULL OR end_time > NOW())
+            ORDER BY start_time DESC
             """,
+            region,
         )
-    except Exception as e:
-        logger.error("Помилка отримання активних відключень: %s", e)
-        raise
 
 
-async def outage_exists(
-    db: Database, region: str, affected_area: str, outage_type: str
-) -> bool:
-    """Перевірити чи вже існує таке відключення (щоб не дублювати)."""
-    try:
-        result = await db.fetchval(
+async def delete_old_outages(db: Database, days: int = 7) -> int:
+    """Delete outages older than specified days.
+    
+    Args:
+        db: Database connection
+        days: Number of days to keep
+        
+    Returns:
+        Number of deleted records
+    """
+    async with db.pool.acquire() as conn:
+        result = await conn.execute(
             """
-            SELECT EXISTS(
-                SELECT 1 FROM outages
-                WHERE region = $1
-                  AND affected_area = $2
-                  AND outage_type = $3
-                  AND (end_time > NOW() OR end_time IS NULL)
-            )
+            DELETE FROM outages 
+            WHERE end_time < NOW() - INTERVAL '%s days'
             """,
-            region, affected_area, outage_type,
+            days,
         )
-        return result
-    except Exception as e:
-        logger.error("Помилка перевірки існування відключення: %s", e)
-        raise
+        # Extract number from "DELETE N"
+        return int(result.split()[-1]) if result else 0
 
 
-# ===================== Notifications =====================
+# ==================== Notifications ====================
 
 async def create_notification(
-    db: Database, user_id: int, outage_id: int, status: str = "sent"
-) -> Any:
-    """Записати сповіщення."""
+    db: Database,
+    user_id: int,
+    outage_id: int,
+) -> Optional[Dict[str, Any]]:
+    """Create notification record (or skip if already exists).
+    
+    Args:
+        db: Database connection
+        user_id: User ID
+        outage_id: Outage ID
+        
+    Returns:
+        Notification record or None if already exists
+    """
     try:
-        return await db.fetchrow(
-            """
-            INSERT INTO notifications (user_id, outage_id, status)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (user_id, outage_id) DO NOTHING
-            RETURNING *
-            """,
-            user_id, outage_id, status,
-        )
-    except Exception as e:
-        logger.error("Помилка створення сповіщення: %s", e)
-        raise
-
-
-async def notification_already_sent(
-    db: Database, user_id: int, outage_id: int
-) -> bool:
-    """Перевірити чи вже надсилали сповіщення."""
-    try:
-        result = await db.fetchval(
-            """
-            SELECT EXISTS(
-                SELECT 1 FROM notifications
-                WHERE user_id = $1 AND outage_id = $2
+        async with db.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                INSERT INTO notifications (user_id, outage_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, outage_id) DO NOTHING
+                RETURNING *
+                """,
+                user_id,
+                outage_id,
             )
-            """,
-            user_id, outage_id,
-        )
-        return result
     except Exception as e:
-        logger.error("Помилка перевірки сповіщення: %s", e)
-        raise
+        logger.error("Failed to create notification: %s", e)
+        return None
+
+
+async def get_user_notifications(
+    db: Database, user_id: int, limit: int = 10
+) -> List[Dict[str, Any]]:
+    """Get recent notifications for user.
+    
+    Args:
+        db: Database connection
+        user_id: User ID
+        limit: Maximum number of records
+        
+    Returns:
+        List of notification records with outage details
+    """
+    async with db.pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT n.*, o.outage_type, o.affected_area, o.start_time, o.end_time
+            FROM notifications n
+            JOIN outages o ON n.outage_id = o.id
+            WHERE n.user_id = $1
+            ORDER BY n.sent_at DESC
+            LIMIT $2
+            """,
+            user_id,
+            limit,
+        )

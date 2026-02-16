@@ -1,146 +1,284 @@
 # ⚡ DTEK Outage Monitor Bot
 
-Telegram-бот для моніторингу аварійних відключень електроенергії ДТЕК у 4 регіонах України.
+Telegram bot for monitoring DTEK power outages in 4 regions of Ukraine. Built from scratch with AJAX-based queue detection.
 
-## 🔌 Можливості
+## 🔌 Features
 
-- **Моніторинг 4 регіонів:** Київ, Київська область, Дніпропетровська область, Одеська область
-- **Збереження адрес:** кожен користувач може зберегти до 10 адрес для моніторингу
-- **Автоматична перевірка:** бот перевіряє сайти ДТЕК кожні 5 хвилин
-- **Сповіщення:** автоматичне повідомлення при виявленні аварійного відключення за адресою користувача
-- **Перевірка статусу:** можливість перевірити поточні відключення за своїми адресами
+- **4 Regions Support:** Kyiv, Kyiv Oblast, Dnipropetrovsk Oblast, Odesa Oblast
+- **102 Queues:** Full support for all outage queues (66 Kyiv + 12×3 other regions)
+- **AJAX Queue Detection:** Direct API calls to DTEK for accurate queue numbers
+- **Save Addresses:** Up to 10 addresses per user
+- **Auto-Monitoring:** Checks DTEK sites every 5 minutes
+- **Instant Notifications:** Alerts when new outages are detected
+- **Status Checking:** Check current outages for your addresses
 
-## 🛠 Технічний стек
+## 🛠 Technology Stack
 
-| Технологія | Версія | Призначення |
+| Technology | Version | Purpose |
 |---|---|---|
-| Python | 3.11 | Мова програмування |
+| Python | 3.11+ | Programming language |
 | python-telegram-bot | 20.7 | Telegram Bot API (async) |
-| Playwright | 1.40.0 | Парсинг сайтів ДТЕК (async) |
+| Playwright | 1.40.0 | Web scraping with AJAX support |
 | asyncpg | 0.29.0 | PostgreSQL (async, connection pool) |
-| APScheduler | 3.10.4 | Планувальник задач |
-| python-dotenv | 1.0.0 | Змінні оточення |
-| tenacity | 8.2.3 | Retry-логіка |
+| APScheduler | 3.10.4 | Task scheduler |
+| python-dotenv | 1.0.0 | Environment variables |
 
-## 🚀 Встановлення та запуск локально
+## 🚀 Quick Start
 
-### 1. Клонування репозиторію
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL 13+
+- Telegram Bot Token (get from [@BotFather](https://t.me/botfather))
+
+### Local Installation
+
+1. **Clone the repository:**
 
 ```bash
 git clone https://github.com/Ivan200424/dtek-address-scraper.git
 cd dtek-address-scraper
 ```
 
-### 2. Створення `.env`
+2. **Create virtual environment:**
 
 ```bash
-cp .env.example .env
-# Відредагуйте .env, додайте свій TELEGRAM_BOT_TOKEN та параметри БД
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-### 3. Встановлення залежностей
+3. **Install dependencies:**
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 4. Створення PostgreSQL бази
+4. **Setup database:**
 
 ```bash
-createdb power_outage_bot
+createdb dtek_bot
 ```
 
-### 5. Ініціалізація бази даних
+5. **Configure environment:**
 
 ```bash
-python init_db.py
+cp .env.example .env
+# Edit .env with your settings:
+# - TELEGRAM_BOT_TOKEN
+# - DATABASE_URL
 ```
 
-### 6. Запуск бота
+6. **Run the bot:**
 
 ```bash
 python main.py
 ```
 
-## 🚂 Деплоймент на Railway
+## 🐳 Docker Deployment
 
-1. Створіть акаунт на [Railway](https://railway.app)
-2. Створіть новий проєкт
-3. Підключіть GitHub репозиторій
-4. Додайте PostgreSQL сервіс
-5. Налаштуйте змінні оточення:
-   - `TELEGRAM_BOT_TOKEN` — токен вашого бота
-   - `DATABASE_URL` — автоматично надається Railway при додаванні PostgreSQL
-6. Railway автоматично збилдить і запустить бота через Dockerfile
+### Using Docker Compose (Recommended)
 
-## 🤖 Команди бота
+1. **Clone and configure:**
 
-| Команда | Опис |
+```bash
+git clone https://github.com/Ivan200424/dtek-address-scraper.git
+cd dtek-address-scraper
+cp .env.example .env
+# Edit .env with your TELEGRAM_BOT_TOKEN
+```
+
+2. **Start services:**
+
+```bash
+docker-compose up -d
+```
+
+3. **View logs:**
+
+```bash
+docker-compose logs -f bot
+```
+
+4. **Stop services:**
+
+```bash
+docker-compose down
+```
+
+### Using Docker only
+
+```bash
+docker build -t dtek-bot .
+docker run -d \
+  --name dtek-bot \
+  -e TELEGRAM_BOT_TOKEN=your_token \
+  -e DATABASE_URL=postgresql://user:pass@host:5432/db \
+  dtek-bot
+```
+
+## 🚂 Railway Deployment
+
+1. Create account on [Railway](https://railway.app)
+2. Create new project from GitHub repo
+3. Add PostgreSQL service
+4. Set environment variables:
+   - `TELEGRAM_BOT_TOKEN` - your bot token
+   - `DATABASE_URL` - automatically provided by Railway
+5. Deploy!
+
+Railway will automatically build using the Dockerfile.
+
+## 🤖 Bot Commands
+
+| Command | Description |
 |---|---|
-| `/start` | Почати роботу з ботом |
-| `/add_address` | Додати адресу для моніторингу |
-| `/my_addresses` | Переглянути збережені адреси |
-| `/delete_address` | Видалити адресу |
-| `/status` | Перевірити поточні відключення |
-| `/help` | Показати довідку |
+| `/start` | Start working with the bot |
+| `/add_address` | Add address for monitoring |
+| `/my_addresses` | View saved addresses |
+| `/delete_address` | Delete an address |
+| `/status` | Check current outages |
+| `/help` | Show help information |
 
-## 📁 Структура проєкту
+## 📱 Usage Flow
+
+1. **Start bot:** `/start`
+2. **Add address:** Click "📍 Додати адресу" button
+3. **Select region:** Choose from 4 available regions
+4. **Enter city:** For regions other than Kyiv (with prefix: м., с., смт., с-ще.)
+5. **Enter street:** With prefix (вул., просп., пров., пл., б-р.)
+6. **Enter building:** House number
+7. **Queue detection:** Bot automatically gets queue number via AJAX
+8. **Confirm:** Click "✅ Підтвердити" to save
+9. **Monitor:** Bot checks every 5 minutes and notifies about outages
+
+## 📁 Project Structure
 
 ```
 dtek-address-scraper/
-├── main.py                          # Точка входу
-├── init_db.py                       # Ініціалізація БД
-├── requirements.txt                 # Залежності
-├── Dockerfile                       # Docker конфігурація
-├── Procfile                         # Railway/Heroku
-├── railway.json                     # Railway конфігурація
-├── nixpacks.toml                    # Nixpacks конфігурація
-├── .env.example                     # Шаблон змінних оточення
+├── main.py                    # Entry point
+├── requirements.txt           # Dependencies
+├── Dockerfile                 # Docker configuration
+├── docker-compose.yml         # Docker Compose setup
+├── .env.example               # Environment template
+├── README.md                  # Documentation
 ├── config/
-│   ├── settings.py                  # Налаштування бота
-│   └── regions.py                   # Конфігурація регіонів ДТЕК
-├── database/
-│   ├── connection.py                # Підключення до PostgreSQL
-│   ├── models.py                    # CRUD операції
-│   └── migrations/
-│       └── init.sql                 # SQL міграція
+│   ├── __init__.py
+│   ├── settings.py            # Settings from .env
+│   └── regions.py             # Regions and queues configuration
 ├── bot/
-│   ├── handlers.py                  # Обробники команд
-│   ├── keyboards.py                 # Клавіатури
-│   └── messages.py                  # Текстові повідомлення
-├── parsers/
-│   ├── base_parser.py               # Базовий клас парсера
-│   ├── kyiv_parser.py               # Парсер Київ
-│   ├── kyiv_region_parser.py        # Парсер Київська область
-│   ├── dnipro_parser.py             # Парсер Дніпро
-│   └── odesa_parser.py              # Парсер Одеса
+│   ├── __init__.py
+│   ├── handlers.py            # Telegram command handlers
+│   ├── keyboards.py           # Keyboard layouts
+│   └── messages.py            # Text messages
+├── database/
+│   ├── __init__.py
+│   ├── connection.py          # PostgreSQL connection
+│   ├── models.py              # CRUD operations
+│   └── migrations/
+│       └── init.sql           # Database initialization
 ├── services/
-│   ├── monitoring.py                # Сервіс моніторингу
-│   ├── notification.py              # Сервіс сповіщень
-│   └── address_matcher.py           # Порівняння адрес
+│   ├── __init__.py
+│   ├── queue_checker.py       # AJAX-based queue detection
+│   ├── outage_checker.py      # Outage monitoring
+│   ├── notifier.py            # User notifications
+│   └── monitoring.py          # Periodic monitoring
+├── parsers/
+│   ├── __init__.py
+│   └── dtek_parser.py         # DTEK website parser
 └── utils/
-    ├── logger.py                    # Налаштування логування
-    └── helpers.py                   # Допоміжні функції
+    ├── __init__.py
+    └── helpers.py             # Utility functions
 ```
 
-## ⚙️ Змінні оточення
+## 🔧 How Queue Detection Works
 
-| Змінна | Обов'язкова | За замовчуванням | Опис |
+The bot uses a direct AJAX approach (not form filling) to get accurate queue numbers:
+
+1. **Open DTEK page** via Playwright
+2. **Extract CSRF token** from `<meta name="csrf-token">`
+3. **POST to `/ua/ajax`** with:
+   - `method=getHomeNum`
+   - Address data (city, street, building)
+   - `updateFact` with current datetime
+4. **Parse JSON response** to extract queue number from `group` field
+
+This approach is based on how real DTEK websites work and provides accurate results.
+
+## 🗺 Supported Regions & Queues
+
+### Kyiv — 66 queues
+- **Standard:** 1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2
+- **Extended:** 7.1 to 60.1 (54 additional queues)
+
+### Kyiv Oblast — 12 queues
+1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2
+
+### Dnipropetrovsk Oblast — 12 queues
+1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2
+
+### Odesa Oblast — 12 queues
+1.1, 1.2, 2.1, 2.2, 3.1, 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 6.2
+
+**Total: 102 queues**
+
+## 🔍 Key Improvements
+
+This rebuild includes critical fixes:
+
+1. **AJAX Queue Detection:** Direct API calls instead of unreliable form filling
+2. **Fixed Confirm Button:** Proper `context.user_data` handling in ConversationHandler
+3. **Database Schema:** `queue_number` column in main CREATE TABLE
+4. **All 102 Queues:** Full support for Kyiv's extended 66 queues
+5. **Proper Error Handling:** Graceful fallback when queue detection fails
+
+## 📝 Environment Variables
+
+| Variable | Required | Default | Description |
 |---|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | ✅ | — | Токен Telegram бота |
-| `DATABASE_URL` | ❌ | — | URL підключення до PostgreSQL (пріоритет) |
-| `DB_HOST` | ❌ | `localhost` | Хост PostgreSQL |
-| `DB_PORT` | ❌ | `5432` | Порт PostgreSQL |
-| `DB_NAME` | ❌ | `power_outage_bot` | Назва бази даних |
-| `DB_USER` | ❌ | `postgres` | Користувач PostgreSQL |
-| `DB_PASSWORD` | ❌ | — | Пароль PostgreSQL |
-| `CHECK_INTERVAL` | ❌ | `300` | Інтервал перевірки (секунди) |
-| `LOG_LEVEL` | ❌ | `INFO` | Рівень логування |
-| `TZ` | ❌ | `Europe/Kiev` | Часова зона |
-| `MAX_ADDRESSES_PER_USER` | ❌ | `10` | Максимум адрес на користувача |
-| `BROWSER_TIMEOUT` | ❌ | `30` | Таймаут браузера (секунди) |
+| `TELEGRAM_BOT_TOKEN` | Yes | - | Telegram bot token |
+| `DATABASE_URL` | Yes | - | PostgreSQL connection string |
+| `DB_POOL_MIN_SIZE` | No | 2 | Min database connections |
+| `DB_POOL_MAX_SIZE` | No | 10 | Max database connections |
+| `CHECK_INTERVAL` | No | 300 | Check interval in seconds |
+| `MAX_ADDRESSES_PER_USER` | No | 10 | Max addresses per user |
+| `LOG_LEVEL` | No | INFO | Logging level |
+| `TZ` | No | Europe/Kyiv | Timezone |
+| `PLAYWRIGHT_TIMEOUT` | No | 60000 | Playwright timeout (ms) |
 
-## 📄 Ліцензія
+## 🐛 Troubleshooting
 
-MIT
+### Bot doesn't start
+- Check `TELEGRAM_BOT_TOKEN` in `.env`
+- Verify PostgreSQL is running
+- Check database connection string
+
+### Queue number always "невідомо"
+- Ensure Playwright browsers are installed: `playwright install chromium`
+- Check DTEK website is accessible
+- Review logs for AJAX request errors
+
+### Database errors
+- Run migrations: `python -c "import asyncio; from database.connection import Database; asyncio.run(Database().init_tables())"`
+- Check PostgreSQL version (13+ recommended)
+
+## 📜 License
+
+MIT License - feel free to use and modify.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## 📧 Support
+
+For issues and questions, please open an issue on GitHub.
+
+## ⭐ Star History
+
+If you find this bot useful, please consider giving it a star! ⭐

@@ -1,133 +1,40 @@
-"""Допоміжні функції."""
+"""Helper utility functions."""
 
-import re
-from datetime import datetime
-
-from config.regions import REGION_EMOJIS
+import logging
+import sys
 
 
-def format_datetime(dt: datetime | None) -> str:
-    """Форматувати дату/час у 'DD.MM.YYYY HH:MM'.
-
+def setup_logging(log_level: str = "INFO") -> None:
+    """Setup logging configuration.
+    
     Args:
-        dt: Об'єкт datetime або None.
-
-    Returns:
-        Відформатований рядок або 'невідомо'.
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     """
-    if dt is None:
-        return "невідомо"
-    return dt.strftime("%d.%m.%Y %H:%M")
+    # Convert string to logging level
+    level = getattr(logging, log_level.upper(), logging.INFO)
 
-
-def truncate_text(text: str, max_length: int = 200) -> str:
-    """Обрізати текст з '...' якщо перевищує максимальну довжину.
-
-    Args:
-        text: Вхідний текст.
-        max_length: Максимальна довжина.
-
-    Returns:
-        Обрізаний текст.
-    """
-    if len(text) <= max_length:
-        return text
-    return text[:max_length - 3] + "..."
-
-
-def escape_html(text: str) -> str:
-    """Екранувати HTML символи для Telegram.
-
-    Args:
-        text: Вхідний текст.
-
-    Returns:
-        Текст з екранованими HTML символами.
-    """
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+    # Create formatter
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    # Setup root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
 
-def validate_street(street: str) -> bool:
-    """Перевірити валідність назви вулиці з префіксом.
+    # Remove existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
 
-    Вулиця повинна починатися з одного з префіксів:
-    вул., просп., пров., пл., б-р.
+    # Add console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
 
-    Args:
-        street: Назва вулиці з префіксом.
-
-    Returns:
-        True якщо валідна.
-    """
-    s = street.strip()
-    if len(s) < 2:
-        return False
-    # Перевіряємо наявність одного з допустимих префіксів
-    prefix_pattern = r"^(вул\.|просп\.|пров\.|пл\.|б-р\.)\s+"
-    match = re.match(prefix_pattern, s, re.IGNORECASE)
-    if not match:
-        return False
-    # Назва після префікса повинна містити мінімум 2 символи
-    name_part = s[match.end():].strip()
-    if len(name_part) < 2:
-        return False
-    # Дозволяємо літери (кирилиця та латиниця), цифри, пробіли, дефіси, крапки
-    name_pattern = r"^[a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9\s\-\.\']+$"
-    return bool(re.match(name_pattern, name_part))
-
-
-def validate_building(building: str) -> bool:
-    """Перевірити валідність номера будинку.
-
-    Args:
-        building: Номер будинку.
-
-    Returns:
-        True якщо валідний.
-    """
-    return len(building.strip()) >= 1
-
-
-def validate_city(city: str) -> bool:
-    """Перевірити валідність назви населеного пункту з префіксом.
-
-    Населений пункт повинен починатися з одного з префіксів:
-    м., с., смт., с-ще.
-
-    Args:
-        city: Назва населеного пункту з префіксом.
-
-    Returns:
-        True якщо валідна.
-    """
-    c = city.strip()
-    if len(c) < 2:
-        return False
-    # Перевіряємо наявність одного з допустимих префіксів
-    prefix_pattern = r"^(м\.|с\.|смт\.|с-ще\.)\s+"
-    match = re.match(prefix_pattern, c, re.IGNORECASE)
-    if not match:
-        return False
-    # Назва після префікса повинна містити мінімум 2 символи
-    name_part = c[match.end():].strip()
-    if len(name_part) < 2:
-        return False
-    # Дозволяємо літери (кирилиця та латиниця), цифри, пробіли, дефіси, апострофи
-    name_pattern = r"^[a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9\s\-\']+$"
-    return bool(re.match(name_pattern, name_part))
-
-
-def get_region_emoji(region_key: str) -> str:
-    """Повернути emoji для регіону.
-
-    Args:
-        region_key: Ключ регіону.
-
-    Returns:
-        Emoji символ.
-    """
-    return REGION_EMOJIS.get(region_key, "📍")
+    # Reduce noise from third-party libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)

@@ -1,1 +1,1 @@
-"""Модуль конфігурації бота."""
+"""Configuration module for DTEK bot."""

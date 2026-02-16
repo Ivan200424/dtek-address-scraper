@@ -67,9 +67,19 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     """Головне меню бота."""
     buttons = [
         ["📍 Додати адресу", "📋 Мої адреси"],
-        ["🔍 Перевірити статус", "❓ Допомога"],
+        ["🔍 Перевірити статус", "🗑 Видалити адресу"],
+        ["❓ Допомога"],
     ]
     return ReplyKeyboardMarkup(
         buttons,
         resize_keyboard=True,
+    )
+
+
+def confirm_keyboard() -> ReplyKeyboardMarkup:
+    """Клавіатура підтвердження адреси."""
+    return ReplyKeyboardMarkup(
+        [["✅ Підтвердити", "❌ Скасувати"]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )

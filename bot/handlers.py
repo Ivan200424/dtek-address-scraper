@@ -289,14 +289,25 @@ async def confirm_address_handler(
 ) -> int:
     """Підтвердження та збереження адреси."""
     user = update.effective_user
-    db = get_db(context)
+    
+    # Безпечне отримання DB з обробкою помилок
+    try:
+        db = get_db(context)
+    except (KeyError, Exception) as e:
+        logger.error("Не вдалося отримати DB: %s", e, exc_info=True)
+        await update.message.reply_text(
+            "❌ Виникла помилка з базою даних. Спробуйте пізніше.",
+            reply_markup=keyboards.main_menu_keyboard(),
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
 
     # Перевірка наявності всіх необхідних даних у context.user_data
     required_keys = ["region", "city", "street", "building"]
     
     if any(key not in context.user_data for key in required_keys):
         missing_keys = [key for key in required_keys if key not in context.user_data]
-        logger.error("Відсутні необхідні дані в context.user_data: %s", missing_keys)
+        logger.error("Відсутні необхідні дані в context.user_data для користувача %s: %s", user.id, missing_keys)
         await update.message.reply_text(
             "❌ Виникла помилка. Будь ласка, спробуйте додати адресу знову.",
             reply_markup=keyboards.main_menu_keyboard(),
@@ -315,7 +326,13 @@ async def confirm_address_handler(
         queue_number = None
     
     full_address = f"{city}, {street}, {building}"
-    normalized = BaseParser.normalize_address(full_address)
+    
+    # Безпечна нормалізація адреси з fallback
+    try:
+        normalized = BaseParser.normalize_address(full_address)
+    except Exception as e:
+        logger.warning("Помилка нормалізації адреси '%s' для користувача %s: %s", full_address, user.id, e)
+        normalized = full_address
 
     try:
         db_user = await get_user_by_chat_id(db, user.id)
@@ -339,9 +356,9 @@ async def confirm_address_handler(
         )
         logger.info("Адресу збережено для користувача %s: %s (черга: %s)", user.id, full_address, queue_number)
     except Exception as e:
-        logger.error("Помилка збереження адреси: %s", e)
+        logger.error("Помилка збереження адреси для користувача %s: %s", user.id, e, exc_info=True)
         await update.message.reply_text(
-            messages.ERROR_MESSAGE,
+            "❌ Не вдалося зберегти адресу. Спробуйте ще раз.",
             reply_markup=keyboards.main_menu_keyboard(),
         )
 

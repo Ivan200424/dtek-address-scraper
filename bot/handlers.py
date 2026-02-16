@@ -291,11 +291,29 @@ async def confirm_address_handler(
     user = update.effective_user
     db = get_db(context)
 
-    region_key = context.user_data.get("region", "")
-    city = context.user_data.get("city", "")
-    street = context.user_data.get("street", "")
-    building = context.user_data.get("building", "")
+    # Перевірка наявності всіх необхідних даних у context.user_data
+    required_keys = ["region", "city", "street", "building"]
+    
+    if any(key not in context.user_data for key in required_keys):
+        missing_keys = [key for key in required_keys if key not in context.user_data]
+        logger.error("Відсутні необхідні дані в context.user_data: %s", missing_keys)
+        await update.message.reply_text(
+            "❌ Виникла помилка. Будь ласка, спробуйте додати адресу знову.",
+            reply_markup=keyboards.main_menu_keyboard(),
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    region_key = context.user_data["region"]
+    city = context.user_data["city"]
+    street = context.user_data["street"]
+    building = context.user_data["building"]
     queue_number = context.user_data.get("queue_number", None)
+    
+    # Конвертувати "невідомо" в None перед збереженням
+    if queue_number == "невідомо":
+        queue_number = None
+    
     full_address = f"{city}, {street}, {building}"
     normalized = BaseParser.normalize_address(full_address)
 
@@ -322,7 +340,10 @@ async def confirm_address_handler(
         logger.info("Адресу збережено для користувача %s: %s (черга: %s)", user.id, full_address, queue_number)
     except Exception as e:
         logger.error("Помилка збереження адреси: %s", e)
-        await update.message.reply_text(messages.ERROR_MESSAGE)
+        await update.message.reply_text(
+            messages.ERROR_MESSAGE,
+            reply_markup=keyboards.main_menu_keyboard(),
+        )
 
     context.user_data.clear()
     return ConversationHandler.END

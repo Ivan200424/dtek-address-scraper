@@ -99,14 +99,55 @@ async def _extract_queue_for_region(
         # Дочекатись завантаження форми
         await page.wait_for_load_state("networkidle", timeout=NAVIGATION_TIMEOUT)
         
-        # Спробувати різні можливі селектори для форми пошуку
+        # Для регіональних сайтів (не Київ) потрібно спочатку заповнити поле міста/населеного пункту
+        if region_key != "kyiv" and city:
+            city_selectors = [
+                "input[placeholder*='населений пункт']",
+                "input[placeholder*='Оберіть населений пункт']",
+                "input[placeholder*='місто']",
+                "input[name*='city']",
+                "input[id*='city']",
+                "[class*='autocomplete'] input",
+                "[role='combobox']",
+            ]
+            
+            city_input = None
+            for selector in city_selectors:
+                try:
+                    city_input = await page.wait_for_selector(selector, timeout=5000)
+                    if city_input:
+                        logger.info("Знайдено поле міста за селектором: %s", selector)
+                        break
+                except Exception:
+                    continue
+            
+            if city_input:
+                # Ввести назву міста та дочекатись автодоповнення
+                await city_input.fill(city)
+                await page.wait_for_timeout(2000)  # Дочекатись автодоповнення
+                
+                # Спробувати вибрати з автодоповнення
+                try:
+                    # Натиснути першу опцію в автодоповненні
+                    await page.keyboard.press("ArrowDown")
+                    await page.keyboard.press("Enter")
+                    await page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+            else:
+                logger.warning("Не знайдено поле для вводу міста/населеного пункту")
+        
+        # Спробувати різні можливі селектори для форми пошуку вулиці
         possible_selectors = [
             "input[placeholder*='Оберіть вулицю']",
             "input[placeholder*='вулиця']",
             "input[name*='street']",
             "input[id*='street']",
             ".search-form input",
-            "#address-search input"
+            "#address-search input",
+            "[class*='autocomplete'] input",
+            "[class*='select'] input",
+            "[role='combobox']",
         ]
         
         street_input = None
@@ -191,8 +232,9 @@ async def _extract_queue_for_region(
         
         # Шукати номер черги в тексті
         for pattern in queue_patterns:
-            # Шукаємо патерни типу "Черга: 1" або "Група 2" тощо
-            match = re.search(rf"{pattern}[:\s]+(\d+)", page_text, re.IGNORECASE)
+            # Шукаємо патерни типу "Черга: 1.1" або "Група 2.2" тощо
+            # Підтримуємо як цілі числа (1, 2), так і дробові (1.1, 2.2)
+            match = re.search(rf"{pattern}[:\s]+(\d+\.?\d*)", page_text, re.IGNORECASE)
             if match:
                 queue_num = match.group(1)
                 logger.info("Знайдено номер черги: %s", queue_num)

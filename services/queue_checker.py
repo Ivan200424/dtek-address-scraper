@@ -1,6 +1,5 @@
 """Сервіс для отримання номера черги відключення через парсинг сайтів ДТЕК."""
 
-import asyncio
 import logging
 import re
 from typing import Optional
@@ -14,6 +13,7 @@ logger = logging.getLogger("services.queue_checker")
 # Таймаути для Playwright операцій (в мілісекундах)
 NAVIGATION_TIMEOUT = 30000  # 30 секунд
 AUTOCOMPLETE_TIMEOUT = 10000  # 10 секунд
+WRAPPER_TIMEOUT = 60000  # 60 секунд для очікування завантаження сторінки
 
 
 async def get_queue_number(
@@ -37,8 +37,14 @@ async def get_queue_number(
         logger.error("Невідомий регіон: %s", region_key)
         return None
     
-    url = REGIONS[region_key]["url"]
-    logger.info("Отримання номера черги для %s, %s, %s (регіон: %s)", city, street, building, region_key)
+    region_code = REGIONS[region_key].get("code")
+    if not region_code:
+        logger.error("Відсутній код регіону для: %s", region_key)
+        return None
+    
+    url = f"https://www.dtek-{region_code}.com.ua/ua/shutdowns"
+    logger.info("Отримання номера черги для %s, %s, %s (регіон: %s, URL: %s)", 
+                city, street, building, region_key, url)
     
     try:
         async with async_playwright() as p:
@@ -54,9 +60,15 @@ async def get_queue_number(
                 await page.goto(url, timeout=NAVIGATION_TIMEOUT, wait_until="domcontentloaded")
                 logger.info("Сторінка %s завантажена", url)
                 
-                # Спробувати знайти форму пошуку адреси
-                # Різні сайти ДТЕК можуть мати різні селектори
-                queue_number = await _extract_queue_for_region(
+                # Дочекатися завантаження основного wrapper (обробка екрану очікування)
+                try:
+                    await page.wait_for_selector(".wrapper", state="attached", timeout=WRAPPER_TIMEOUT)
+                    logger.info("Wrapper знайдено, форма має бути доступна")
+                except PlaywrightTimeoutError:
+                    logger.warning("Таймаут очікування .wrapper, продовжуємо")
+                
+                # Отримати номер черги
+                queue_number = await _fill_form_and_get_queue(
                     page, region_key, city, street, building
                 )
                 
@@ -76,174 +88,151 @@ async def get_queue_number(
         return None
 
 
-async def _extract_queue_for_region(
+async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
+    """Заповнити поле з автодоповненням на сайті ДТЕК.
+    
+    Real DTEK sites use input[name=X] with sibling .autocomplete-items > div dropdowns.
+    
+    Args:
+        page: Playwright page object
+        field_name: Назва поля (city, street, house_num)
+        value: Значення для введення
+        
+    Returns:
+        True якщо успішно, False якщо помилка
+    """
+    input_selector = f"input[name={field_name}]"
+    option_selector = f"{input_selector} ~ .autocomplete-items > div"
+    
+    try:
+        # Очікування та заповнення поля
+        await page.wait_for_selector(input_selector, state="attached", timeout=AUTOCOMPLETE_TIMEOUT)
+        await page.fill(input_selector, value)
+        logger.info("Заповнено поле %s значенням: %s", field_name, value)
+        
+        # Очікування появи випадаючого списку автодоповнення
+        await page.wait_for_selector(option_selector, state="visible", timeout=AUTOCOMPLETE_TIMEOUT)
+        logger.info("Випадаючий список автодоповнення для %s з'явився", field_name)
+        
+        # Клік по першій опції
+        await page.click(option_selector, timeout=5000)
+        logger.info("Вибрано першу опцію з автодоповнення для %s", field_name)
+        
+        # Очікування встановлення значення
+        await page.wait_for_function(
+            f"!!document.querySelector('{input_selector}')?.value",
+            timeout=5000
+        )
+        logger.info("Значення поля %s встановлено", field_name)
+        
+        return True
+    except PlaywrightTimeoutError as e:
+        logger.error("Таймаут при заповненні поля %s: %s", field_name, e)
+        return False
+    except Exception as e:
+        logger.error("Помилка при заповненні поля %s: %s", field_name, e)
+        return False
+
+
+async def _fill_form_and_get_queue(
     page,
     region_key: str,
     city: Optional[str],
     street: str,
     building: str
 ) -> Optional[str]:
-    """Витягнути номер черги з сторінки для конкретного регіону.
+    """Заповнити форму на сайті ДТЕК та отримати номер черги.
     
-    Кожен сайт ДТЕК має свій власний інтерфейс, тому потрібна окрема логіка.
+    Використовує правильні селектори на основі реальної структури сайтів ДТЕК:
+    - input[name=city] для міста/населеного пункту
+    - input[name=street] для вулиці
+    - input[name=house_num] для будинку
+    - .autocomplete-items > div для випадаючих списків
+    - DisconSchedule.group для отримання номера черги
     """
     try:
-        # Загальний підхід: шукаємо форму з полями для адреси
-        # Більшість сайтів ДТЕК мають структуру:
-        # - Поле для населеного пункту (якщо не Київ)
-        # - Поле для вулиці
-        # - Поле для будинку
-        # - Кнопка пошуку
-        # - Результат з номером черги
-        
-        # Дочекатись завантаження форми
-        await page.wait_for_load_state("networkidle", timeout=NAVIGATION_TIMEOUT)
-        
-        # Для регіональних сайтів (не Київ) потрібно спочатку заповнити поле міста/населеного пункту
+        # Для всіх регіонів, окрім Києва, потрібно заповнити поле міста
         if region_key != "kyiv" and city:
-            city_selectors = [
-                "input[placeholder*='населений пункт']",
-                "input[placeholder*='Оберіть населений пункт']",
-                "input[placeholder*='місто']",
-                "input[name*='city']",
-                "input[id*='city']",
-                "[class*='autocomplete'] input",
-                "[role='combobox']",
-            ]
+            success = await _fill_autocomplete(page, "city", city)
+            if not success:
+                logger.warning("Не вдалося заповнити поле міста")
+                return "невідомо"
             
-            city_input = None
-            for selector in city_selectors:
-                try:
-                    city_input = await page.wait_for_selector(selector, timeout=5000)
-                    if city_input:
-                        logger.info("Знайдено поле міста за селектором: %s", selector)
-                        break
-                except Exception:
-                    continue
-            
-            if city_input:
-                # Ввести назву міста та дочекатись автодоповнення
-                await city_input.fill(city)
-                await page.wait_for_timeout(2000)  # Дочекатись автодоповнення
-                
-                # Спробувати вибрати з автодоповнення
-                try:
-                    # Натиснути першу опцію в автодоповненні
-                    await page.keyboard.press("ArrowDown")
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_timeout(1000)
-                except Exception:
-                    pass
-            else:
-                logger.warning("Не знайдено поле для вводу міста/населеного пункту")
+            # Короткий таймаут після вибору міста
+            await page.wait_for_timeout(1000)
         
-        # Спробувати різні можливі селектори для форми пошуку вулиці
-        possible_selectors = [
-            "input[placeholder*='Оберіть вулицю']",
-            "input[placeholder*='вулиця']",
-            "input[name*='street']",
-            "input[id*='street']",
-            ".search-form input",
-            "#address-search input",
-            "[class*='autocomplete'] input",
-            "[class*='select'] input",
-            "[role='combobox']",
-        ]
-        
-        street_input = None
-        for selector in possible_selectors:
-            try:
-                street_input = await page.wait_for_selector(selector, timeout=5000)
-                if street_input:
-                    logger.info("Знайдено поле вулиці за селектором: %s", selector)
-                    break
-            except Exception:
-                continue
-        
-        if not street_input:
-            logger.warning("Не знайдено поле для вводу вулиці на сторінці")
+        # Заповнити вулицю
+        success = await _fill_autocomplete(page, "street", street)
+        if not success:
+            logger.warning("Не вдалося заповнити поле вулиці")
             return "невідомо"
         
-        # Ввести вулицю та дочекатись автодоповнення
-        await street_input.fill(street)
-        await page.wait_for_timeout(2000)  # Дочекатись автодоповнення
+        # Короткий таймаут після вибору вулиці
+        await page.wait_for_timeout(1000)
         
-        # Спробувати вибрати з автодоповнення
-        try:
-            # Натиснути першу опцію в автодоповненні
-            await page.keyboard.press("ArrowDown")
-            await page.keyboard.press("Enter")
-            await page.wait_for_timeout(1000)
-        except Exception:
-            pass
+        # Заповнити будинок
+        success = await _fill_autocomplete(page, "house_num", building)
+        if not success:
+            logger.warning("Не вдалося заповнити поле будинку")
+            return "невідомо"
         
-        # Знайти поле будинку
-        building_selectors = [
-            "input[placeholder*='будинок']",
-            "input[placeholder*='будівля']",
-            "input[name*='building']",
-            "input[id*='building']"
-        ]
-        
-        building_input = None
-        for selector in building_selectors:
-            try:
-                building_input = await page.wait_for_selector(selector, timeout=5000)
-                if building_input:
-                    logger.info("Знайдено поле будинку за селектором: %s", selector)
-                    break
-            except Exception:
-                continue
-        
-        if building_input:
-            await building_input.fill(building)
-            await page.wait_for_timeout(1000)
-        
-        # Натиснути кнопку пошуку
-        search_button_selectors = [
-            "button[type='submit']",
-            "button:has-text('Знайти')",
-            "button:has-text('Пошук')",
-            ".search-button",
-            "#search-btn"
-        ]
-        
-        for selector in search_button_selectors:
-            try:
-                await page.click(selector, timeout=5000)
-                logger.info("Натиснуто кнопку пошуку за селектором: %s", selector)
-                break
-            except Exception:
-                continue
-        
-        # Дочекатись результату
+        # Після заповнення всіх полів, сайт автоматично відправляє AJAX запит до /ua/ajax
+        # Дочекатися відповіді та читання змінної DisconSchedule.group
         await page.wait_for_timeout(3000)
         
-        # Шукаємо номер черги в результатах
-        queue_patterns = [
-            "черга",
-            "група",
-            "group",
-            "queue"
-        ]
+        # Спробувати отримати номер черги з JavaScript змінної DisconSchedule.group
+        try:
+            queue_group = await page.evaluate(
+                "() => window.DisconSchedule?.group || null"
+            )
+            
+            if queue_group:
+                logger.info("Отримано значення DisconSchedule.group: %s", queue_group)
+                
+                # Парсинг номера черги з формату "1.1 черга" або подібного
+                # Підтримка десяткових чисел (1.1, 2.2, тощо)
+                match = re.search(r'(\d+\.\d+)', str(queue_group))
+                if match:
+                    queue_number = match.group(1)
+                    logger.info("Знайдено номер черги: %s", queue_number)
+                    return queue_number
+                else:
+                    # Спробувати знайти ціле число, якщо немає десяткової частини
+                    match = re.search(r'(\d+)', str(queue_group))
+                    if match:
+                        queue_number = match.group(1)
+                        logger.info("Знайдено номер черги (ціле число): %s", queue_number)
+                        return queue_number
+            else:
+                logger.warning("DisconSchedule.group не знайдено або порожнє")
+        except Exception as e:
+            logger.error("Помилка читання DisconSchedule.group: %s", e)
         
-        # Отримати весь текст сторінки
-        page_text = await page.inner_text("body")
+        # Альтернативний підхід: перехоплення AJAX відповіді до /ua/ajax
+        # Якщо DisconSchedule.group не спрацював, спробуємо знайти інформацію на сторінці
+        try:
+            page_content = await page.content()
+            
+            # Шукати патерни типу "1.1 черга", "Черга: 1.1", тощо
+            patterns = [
+                r'(\d+\.\d+)\s*черга',
+                r'черга[:\s]+(\d+\.\d+)',
+                r'група[:\s]+(\d+\.\d+)',
+                r'group[:\s]+(\d+\.\d+)',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, page_content, re.IGNORECASE)
+                if match:
+                    queue_number = match.group(1)
+                    logger.info("Знайдено номер черги через патерн '%s': %s", pattern, queue_number)
+                    return queue_number
+        except Exception as e:
+            logger.error("Помилка пошуку номера черги в контенті сторінки: %s", e)
         
-        # Шукати номер черги в тексті
-        for pattern in queue_patterns:
-            # Шукаємо патерни типу "Черга: 1.1" або "Група 2.2" тощо
-            # Підтримуємо як цілі числа (1, 2), так і дробові (1.1, 2.2)
-            match = re.search(rf"{pattern}[:\s]+(\d+\.?\d*)", page_text, re.IGNORECASE)
-            if match:
-                queue_num = match.group(1)
-                logger.info("Знайдено номер черги: %s", queue_num)
-                return queue_num
-        
-        # Якщо не знайшли специфічний патерн, шукаємо просто цифри після ключових слів
-        logger.warning("Не вдалось знайти номер черги на сторінці")
+        logger.warning("Не вдалось знайти номер черги")
         return "невідомо"
         
     except Exception as e:
-        logger.error("Помилка при витягуванні номера черги: %s", e)
+        logger.error("Помилка при заповненні форми та отриманні черги: %s", e)
         return "невідомо"

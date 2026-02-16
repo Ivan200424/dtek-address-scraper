@@ -52,19 +52,32 @@ def escape_html(text: str) -> str:
 
 
 def validate_street(street: str) -> bool:
-    """Перевірити валідність назви вулиці.
+    """Перевірити валідність назви вулиці з префіксом.
+
+    Вулиця повинна починатися з одного з префіксів:
+    вул., просп., пров., пл., б-р.
 
     Args:
-        street: Назва вулиці.
+        street: Назва вулиці з префіксом.
 
     Returns:
         True якщо валідна.
     """
-    if len(street.strip()) < 2:
+    s = street.strip()
+    if len(s) < 2:
+        return False
+    # Перевіряємо наявність одного з допустимих префіксів
+    prefix_pattern = r"^(вул\.|просп\.|пров\.|пл\.|б-р\.)\s+"
+    match = re.match(prefix_pattern, s, re.IGNORECASE)
+    if not match:
+        return False
+    # Назва після префікса повинна містити мінімум 2 символи
+    name_part = s[match.end():].strip()
+    if len(name_part) < 2:
         return False
     # Дозволяємо літери (кирилиця та латиниця), цифри, пробіли, дефіси, крапки
-    pattern = r"^[a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9\s\-\.\']+$"
-    return bool(re.match(pattern, street.strip()))
+    name_pattern = r"^[a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9\s\-\.\']+$"
+    return bool(re.match(name_pattern, name_part))
 
 
 def validate_building(building: str) -> bool:
@@ -77,6 +90,35 @@ def validate_building(building: str) -> bool:
         True якщо валідний.
     """
     return len(building.strip()) >= 1
+
+
+def validate_city(city: str) -> bool:
+    """Перевірити валідність назви населеного пункту з префіксом.
+
+    Населений пункт повинен починатися з одного з префіксів:
+    м., с., смт., с-ще.
+
+    Args:
+        city: Назва населеного пункту з префіксом.
+
+    Returns:
+        True якщо валідна.
+    """
+    c = city.strip()
+    if len(c) < 2:
+        return False
+    # Перевіряємо наявність одного з допустимих префіксів
+    prefix_pattern = r"^(м\.|с\.|смт\.|с-ще\.)\s+"
+    match = re.match(prefix_pattern, c, re.IGNORECASE)
+    if not match:
+        return False
+    # Назва після префікса повинна містити мінімум 2 символи
+    name_part = c[match.end():].strip()
+    if len(name_part) < 2:
+        return False
+    # Дозволяємо літери (кирилиця та латиниця), цифри, пробіли, дефіси, апострофи
+    name_pattern = r"^[a-zA-Zа-яА-ЯіІїЇєЄґҐ0-9\s\-\']+$"
+    return bool(re.match(name_pattern, name_part))
 
 
 def get_region_emoji(region_key: str) -> str:

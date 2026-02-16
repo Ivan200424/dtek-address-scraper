@@ -25,11 +25,13 @@ from database.models import (
     get_user_by_chat_id,
 )
 from parsers.base_parser import BaseParser
+from services.address_matcher import AddressMatcher
 from utils.helpers import (
     escape_html,
     format_datetime,
     get_region_emoji,
     validate_building,
+    validate_city,
     validate_street,
 )
 
@@ -123,9 +125,9 @@ async def region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Для Києва пропускаємо етап міста
     if region_key == "kyiv":
-        context.user_data["city"] = "Київ"
+        context.user_data["city"] = "м. Київ"
         await query.edit_message_text(
-            f"✅ Регіон: {region_name}\n🏙 Місто: Київ\n\n{messages.ENTER_STREET}"
+            f"✅ Регіон: {region_name}\n🏙 Населений пункт: м. Київ\n\n{messages.ENTER_STREET}"
         )
         return ENTER_STREET
 
@@ -142,8 +144,8 @@ async def city_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if city == "❌ Скасувати":
         return await cancel_handler(update, context)
 
-    if len(city) < 2:
-        await update.message.reply_text(messages.INVALID_CITY)
+    if not validate_city(city):
+        await update.message.reply_text(messages.INVALID_CITY_PREFIX)
         return ENTER_CITY
 
     context.user_data["city"] = city
@@ -159,7 +161,7 @@ async def street_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return await cancel_handler(update, context)
 
     if not validate_street(street):
-        await update.message.reply_text(messages.INVALID_STREET)
+        await update.message.reply_text(messages.INVALID_STREET_PREFIX)
         return ENTER_STREET
 
     context.user_data["street"] = street
@@ -168,7 +170,7 @@ async def street_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обробка введення номера будинку — показати підсумок."""
+    """Обробка введення номера будинку — показати підсумок з інформацією про відключення."""
     building = update.message.text.strip()
 
     if building == "❌ Скасувати":
@@ -186,6 +188,11 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     region_name = REGIONS[region_key]["name"]
     full_address = f"{city}, {street}, {building}"
 
+    # Перевірити поточні відключення за цією адресою
+    outage_status = await _check_address_outages(
+        context, region_key, full_address
+    )
+
     await update.message.reply_text(
         messages.CONFIRM_ADDRESS.format(
             region_name=region_name,
@@ -193,9 +200,70 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             street=street,
             building=building,
             full_address=full_address,
+            outage_status=outage_status,
         )
     )
     return CONFIRM_ADDRESS
+
+
+async def _check_address_outages(
+    context: ContextTypes.DEFAULT_TYPE,
+    region_key: str,
+    full_address: str,
+) -> str:
+    """Перевірити поточні відключення для адреси.
+
+    Args:
+        context: Контекст бота.
+        region_key: Ключ регіону.
+        full_address: Повна адреса.
+
+    Returns:
+        Текст зі статусом відключень.
+    """
+    db = get_db(context)
+    normalized = BaseParser.normalize_address(full_address)
+
+    try:
+        outages = await get_active_outages(db, region_key)
+        if not outages:
+            return messages.OUTAGE_STATUS_NONE
+
+        matching_outages = []
+        matcher = AddressMatcher()
+        for outage in outages:
+            if matcher.check_match(normalized, outage["affected_area"]):
+                matching_outages.append(outage)
+
+        if not matching_outages:
+            return messages.OUTAGE_STATUS_NONE
+
+        items = []
+        for outage in matching_outages:
+            outage_type = outage.get("outage_type", "emergency")
+            if outage_type == "emergency":
+                emoji = "🔴"
+                type_text = "Аварійне відключення"
+            elif outage_type == "planned":
+                emoji = "🟡"
+                type_text = "Планове відключення"
+            else:
+                emoji = "⚪"
+                type_text = outage_type
+
+            items.append(messages.OUTAGE_STATUS_ITEM.format(
+                emoji=emoji,
+                outage_type=type_text,
+                start_time=format_datetime(outage.get("start_time")),
+                end_time=format_datetime(outage.get("end_time")),
+            ))
+
+        return messages.OUTAGE_STATUS_INFO.format(
+            outages_list="\n".join(items)
+        )
+    except Exception as e:
+        logger.error("Помилка перевірки відключень для адреси: %s", e)
+        return messages.OUTAGE_STATUS_NONE
 
 
 async def confirm_address_handler(

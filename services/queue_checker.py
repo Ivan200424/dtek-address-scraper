@@ -125,8 +125,10 @@ async def _fill_autocomplete(page, field_name: str, value: str) -> bool:
         logger.info("Вибрано першу опцію з автодоповнення для %s", field_name)
         
         # Очікування встановлення значення
+        # Use Playwright's evaluate with parameterized selector for safety
         await page.wait_for_function(
-            f"!!document.querySelector('{input_selector}')?.value",
+            "(selector) => !!document.querySelector(selector)?.value",
+            input_selector,
             timeout=5000
         )
         logger.info("Значення поля %s встановлено", field_name)
@@ -164,7 +166,7 @@ async def _fill_form_and_get_queue(
                 logger.warning("Не вдалося заповнити поле міста")
                 return "невідомо"
             
-            # Короткий таймаут після вибору міста
+            # Короткий таймаут після вибору міста (дозволити AJAX оновити залежні поля)
             await page.wait_for_timeout(1000)
         
         # Заповнити вулицю
@@ -173,7 +175,7 @@ async def _fill_form_and_get_queue(
             logger.warning("Не вдалося заповнити поле вулиці")
             return "невідомо"
         
-        # Короткий таймаут після вибору вулиці
+        # Короткий таймаут після вибору вулиці (дозволити AJAX оновити залежні поля)
         await page.wait_for_timeout(1000)
         
         # Заповнити будинок
@@ -183,7 +185,7 @@ async def _fill_form_and_get_queue(
             return "невідомо"
         
         # Після заповнення всіх полів, сайт автоматично відправляє AJAX запит до /ua/ajax
-        # Дочекатися відповіді та читання змінної DisconSchedule.group
+        # Дочекатися відповіді та встановлення змінної DisconSchedule.group
         await page.wait_for_timeout(3000)
         
         # Спробувати отримати номер черги з JavaScript змінної DisconSchedule.group
@@ -193,14 +195,20 @@ async def _fill_form_and_get_queue(
             )
             
             if queue_group:
-                logger.info("Отримано значення DisconSchedule.group: %s", queue_group)
+                logger.info("Отримано значення DisconSchedule.group: %s (type: %s)", queue_group, type(queue_group).__name__)
+                
+                # Handle numeric types directly
+                if isinstance(queue_group, (int, float)):
+                    queue_number = str(queue_group)
+                    logger.info("Знайдено номер черги (числовий тип): %s", queue_number)
+                    return queue_number
                 
                 # Парсинг номера черги з формату "1.1 черга" або подібного
                 # Підтримка десяткових чисел (1.1, 2.2) та цілих чисел (1, 2)
                 match = re.search(r'(\d+(?:\.\d+)?)', str(queue_group))
                 if match:
                     queue_number = match.group(1)
-                    logger.info("Знайдено номер черги: %s", queue_number)
+                    logger.info("Знайдено номер черги (через regex): %s", queue_number)
                     return queue_number
             else:
                 logger.warning("DisconSchedule.group не знайдено або порожнє")

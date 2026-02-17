@@ -197,13 +197,14 @@ The bot uses a direct AJAX approach (not form filling) to get accurate queue num
 
 1. **Open DTEK page** via Playwright
 2. **Extract CSRF token** from `<meta name="csrf-token">`
-3. **POST to `/ua/ajax`** with:
+3. **Resolve street name** via `getStreet` API to get exact match from DTEK database
+4. **POST to `/ua/ajax`** with:
    - `method=getHomeNum`
-   - Address data (city, street, building)
+   - Address data (city, resolved street, building)
    - `updateFact` with current datetime
-4. **Parse JSON response** to extract queue number from `group` field
+5. **Parse JSON response** to extract queue number from `group` field
 
-This approach is based on how real DTEK websites work and provides accurate results.
+This approach mirrors how the DTEK website works internally and ensures accurate results even when users provide street names without proper prefixes.
 
 ## 🗺 Supported Regions & Queues
 

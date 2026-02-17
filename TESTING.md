@@ -17,15 +17,18 @@ python main.py
 1. /start
 2. Click "📍 Додати адресу"
 3. Select region (e.g., Київ)
-4. Enter street: вул. Хрещатик
-5. Enter building: 1
-6. Wait for queue detection
-7. ✅ Expected: Queue number should be shown (not "невідомо")
+4. Enter city: Київ (or м. Київ - both work now)
+5. Enter street: Хрещатик (or вул. Хрещатик - both work now)
+6. Enter building: 1
+7. Wait for queue detection
+8. ✅ Expected: Queue number should be shown (not "невідомо")
+
+Note: The bot now accepts flexible input without requiring prefixes.
 ```
 
 **Technical verification:**
 ```python
-# Test queue checker directly
+# Test queue checker directly with flexible input (no prefix required)
 python -c "
 import asyncio
 from services.queue_checker import get_queue_number
@@ -33,8 +36,8 @@ from services.queue_checker import get_queue_number
 async def test():
     result = await get_queue_number(
         region_key='kyiv',
-        city='м. Київ',
-        street='вул. Хрещатик',
+        city='Київ',  # No prefix needed
+        street='Хрещатик',  # No prefix needed
         building='1'
     )
     print(f'Queue number: {result}')
@@ -143,17 +146,23 @@ docker-compose ps
 2. Extract CSRF token
    └─> document.querySelector('meta[name="csrf-token"]')
 
-3. Build form data
+3. Resolve street name via getStreet API
+   ├─> method: "getStreet"
+   ├─> data[0]: city (if not Kyiv)
+   ├─> data[N]: street query
+   └─> Returns list of matching street names from DTEK database
+
+4. Build form data for getHomeNum
    ├─> method: "getHomeNum"
    ├─> data[0]: city (if not Kyiv)
-   ├─> data[1]: street
+   ├─> data[1]: resolved exact street name
    ├─> data[2]: building (house_num)
    └─> data[3]: updateFact (current datetime)
 
-4. POST to /ua/ajax
+5. POST to /ua/ajax
    └─> Headers: X-CSRF-TOKEN, X-Requested-With
 
-5. Parse JSON response
+6. Parse JSON response
    └─> Extract queue number from response.group
 ```
 
@@ -253,8 +262,9 @@ playwright install-deps chromium
 
 1. ✅ CSRF tokens properly handled
 2. ✅ SQL injection prevented (asyncpg parameterized queries)
-3. ✅ User input validated (city/street prefixes, building format)
-4. ✅ No secrets in code (environment variables)
+3. ✅ User input validated (basic validation for city/street/building format)
+4. ✅ Street names resolved via DTEK API before submission
+5. ✅ No secrets in code (environment variables)
 
 ## Next Steps
 

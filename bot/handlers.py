@@ -46,17 +46,35 @@ def get_max_addresses(context: ContextTypes.DEFAULT_TYPE) -> int:
 # ==================== Helper Functions ====================
 
 def validate_city(city: str) -> bool:
-    """Validate city name has proper prefix."""
-    city_lower = city.lower().strip()
-    valid_prefixes = ["м. ", "с. ", "смт. ", "с-ще. "]
-    return any(city_lower.startswith(prefix) for prefix in valid_prefixes)
+    """Validate city name (prefixes are optional).
+    
+    Accepts both:
+    - With prefix: "м. Київ", "с. Нижча Дубечня"
+    - Without prefix: "Київ", "Нижча Дубечня"
+    """
+    city_stripped = city.strip()
+    # Must have at least 2 characters and contain at least 2 alphabetic characters
+    # This prevents inputs like "12" or "a1" while allowing "Київ" or "м. Київ"
+    if len(city_stripped) < 2:
+        return False
+    alpha_count = sum(1 for c in city_stripped if c.isalpha())
+    return alpha_count >= 2
 
 
 def validate_street(street: str) -> bool:
-    """Validate street name has proper prefix."""
-    street_lower = street.lower().strip()
-    valid_prefixes = ["вул. ", "просп. ", "пров. ", "пл. ", "б-р. "]
-    return any(street_lower.startswith(prefix) for prefix in valid_prefixes)
+    """Validate street name (prefixes are optional).
+    
+    Accepts both:
+    - With prefix: "вул. Хрещатик", "просп. Перемоги"
+    - Without prefix: "Хрещатик", "Деснянська"
+    """
+    street_stripped = street.strip()
+    # Must have at least 2 characters and contain at least 2 alphabetic characters
+    # This prevents inputs like "12" or "a1" while allowing "Хрещатик" or "вул. Хрещатик"
+    if len(street_stripped) < 2:
+        return False
+    alpha_count = sum(1 for c in street_stripped if c.isalpha())
+    return alpha_count >= 2
 
 
 def validate_building(building: str) -> bool:

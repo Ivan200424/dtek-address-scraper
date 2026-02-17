@@ -615,7 +615,7 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     results = []
     
     # Test 1: Can Playwright launch?
-    results.append("**Тест 1: Запуск браузера**")
+    results.append("Тест 1: Запуск браузера")
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
@@ -628,7 +628,7 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     # Test 2: Can we reach dtek-krem.com.ua?
-    results.append("\n**Тест 2: З'єднання з ДТЕК (Київська область)**")
+    results.append("\nТест 2: З'єднання з ДТЕК (Київська область)")
     try:
         from playwright.async_api import async_playwright
         from config.regions import REGIONS
@@ -656,7 +656,7 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     # Test 3: Can we get CSRF token?
-    results.append("\n**Тест 3: Отримання CSRF токену**")
+    results.append("\nТест 3: Отримання CSRF токену")
     try:
         from playwright.async_api import async_playwright
         from config.regions import REGIONS
@@ -687,7 +687,7 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         results.append(f"❌ Помилка отримання CSRF токену: {str(e)}")
     
     # Test 4: Can getStreet API work?
-    results.append("\n**Тест 4: API пошуку вулиці**")
+    results.append("\nТест 4: API пошуку вулиці")
     try:
         from services.queue_checker import get_queue_number
         
@@ -710,11 +710,11 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Send final results
     final_text = "\n".join(results)
-    final_text += "\n\n**Діагностика завершена**"
+    final_text += "\n\n📋 Діагностика завершена"
     final_text += "\n\nЯкщо всі тести пройшли успішно, спробуйте додати адресу ще раз."
     final_text += "\nЯкщо проблема залишається, зверніться до розробників."
     
-    await msg.edit_text(final_text, parse_mode="Markdown")
+    await msg.edit_text(final_text)
 
 
 # ==================== Menu Text Handlers ====================

@@ -251,14 +251,13 @@ async def _get_queue_number_attempt(
                 # This ensures we use the correct name from DTEK's database
                 exact_street = await search_street(page, csrf_token, region_key, city, street)
                 
+                # Track if street was found in DTEK database
+                street_not_found = exact_street is None
+                
                 # If street resolution failed, fall back to cleaned user input
-                if not exact_street:
+                if street_not_found:
                     logger.warning("Street resolution failed, using cleaned user input")
                     exact_street = strip_prefix(street, STREET_PREFIXES)
-                    # Mark as potential issue but continue
-                    street_not_found = True
-                else:
-                    street_not_found = False
                 
                 is_kyiv = region_key == "kyiv"
                 clean_city = strip_prefix(city, CITY_PREFIXES) if city else ""

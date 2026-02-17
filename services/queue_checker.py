@@ -104,6 +104,7 @@ async def search_street(
             data = response_data["data"]
             if isinstance(data, list) and len(data) > 0:
                 # Return the first matching street name
+                # DTEK API returns results sorted by relevance, with best match first
                 exact_street = data[0]
                 logger.info("Found exact street name: '%s' for query: '%s'", exact_street, clean_street)
                 return exact_street

@@ -53,8 +53,12 @@ def validate_city(city: str) -> bool:
     - Without prefix: "Київ", "Нижча Дубечня"
     """
     city_stripped = city.strip()
-    # Must have at least 2 characters and contain letters
-    return len(city_stripped) >= 2 and any(c.isalpha() for c in city_stripped)
+    # Must have at least 2 characters and contain at least 2 alphabetic characters
+    # This prevents inputs like "12" or "a1" while allowing "Київ" or "м. Київ"
+    if len(city_stripped) < 2:
+        return False
+    alpha_count = sum(1 for c in city_stripped if c.isalpha())
+    return alpha_count >= 2
 
 
 def validate_street(street: str) -> bool:
@@ -65,8 +69,12 @@ def validate_street(street: str) -> bool:
     - Without prefix: "Хрещатик", "Деснянська"
     """
     street_stripped = street.strip()
-    # Must have at least 2 characters and contain letters
-    return len(street_stripped) >= 2 and any(c.isalpha() for c in street_stripped)
+    # Must have at least 2 characters and contain at least 2 alphabetic characters
+    # This prevents inputs like "12" or "a1" while allowing "Хрещатик" or "вул. Хрещатик"
+    if len(street_stripped) < 2:
+        return False
+    alpha_count = sum(1 for c in street_stripped if c.isalpha())
+    return alpha_count >= 2
 
 
 def validate_building(building: str) -> bool:

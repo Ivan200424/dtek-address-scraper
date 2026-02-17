@@ -44,6 +44,15 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 CITY_PREFIXES = ["м. ", "с. ", "смт. ", "с-ще. "]
 STREET_PREFIXES = ["вул. ", "просп. ", "пров. ", "пл. ", "б-р. "]
 
+# Autocomplete dropdown selectors (common patterns for jQuery UI and custom implementations)
+AUTOCOMPLETE_SELECTORS = [
+    '.ui-menu-item:first-child',
+    '.ui-autocomplete li:first-child',
+    '[role="option"]:first-child',
+    '.autocomplete-item:first-child',
+    '.suggestion:first-child',
+]
+
 
 def strip_prefix(text: str, prefixes: list[str]) -> str:
     """Strip known prefixes from text.
@@ -322,16 +331,8 @@ async def _get_queue_number_form_interaction(
                     await page.wait_for_timeout(1500)
                     
                     # Try to find and click autocomplete suggestion
-                    autocomplete_selectors = [
-                        '.ui-menu-item:first-child',
-                        '.ui-autocomplete li:first-child',
-                        '[role="option"]:first-child',
-                        '.autocomplete-item:first-child',
-                        '.suggestion:first-child',
-                    ]
-                    
                     suggestion_clicked = False
-                    for selector in autocomplete_selectors:
+                    for selector in AUTOCOMPLETE_SELECTORS:
                         try:
                             suggestion = await page.wait_for_selector(selector, timeout=3000)
                             if suggestion:
@@ -382,18 +383,9 @@ async def _get_queue_number_form_interaction(
                 # Wait for autocomplete dropdown to appear
                 await page.wait_for_timeout(1500)
                 
-                # Define autocomplete selectors (same as city autocomplete)
-                autocomplete_selectors = [
-                    '.ui-menu-item:first-child',
-                    '.ui-autocomplete li:first-child',
-                    '[role="option"]:first-child',
-                    '.autocomplete-item:first-child',
-                    '.suggestion:first-child',
-                ]
-                
                 # Try to find and click autocomplete suggestion
                 suggestion_clicked = False
-                for selector in autocomplete_selectors:
+                for selector in AUTOCOMPLETE_SELECTORS:
                     try:
                         suggestion = await page.wait_for_selector(selector, timeout=3000)
                         if suggestion:
@@ -427,7 +419,7 @@ async def _get_queue_number_form_interaction(
                 
                 if building_select:
                     logger.info("Found building select dropdown")
-                    options_data = await page.evaluate('''(building) => {
+                    options_data = await page.evaluate('''() => {
                         const select = document.querySelector('select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]');
                         if (!select) return null;
                         
@@ -437,7 +429,7 @@ async def _get_queue_number_form_interaction(
                         }));
                         
                         return options;
-                    }''', building)
+                    }''')
                     
                     if options_data:
                         logger.debug("Found %d building options", len(options_data))

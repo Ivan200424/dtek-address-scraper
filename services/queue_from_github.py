@@ -3,6 +3,13 @@
 This module fetches schedule data from the Baskerville42/outage-data-ua repository
 which updates every 5 minutes and contains schedule data for all queues.
 
+NOTE: The actual data format from the GitHub repo is more complex than initially
+designed. The data uses "GPV" prefix for queue numbers (e.g., "GPV1.1", "GPV3.1")
+and has a nested structure with timestamps and hour-by-hour status.
+
+This module is currently a stub for future implementation. The main queue detection
+functionality in queue_checker.py does not depend on this module.
+
 Can be used to:
 - Verify queue numbers from the DTEK website
 - Show schedule information for a specific queue
@@ -35,16 +42,21 @@ async def fetch_region_schedules(region_key: str) -> Optional[Dict[str, Any]]:
         region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
         
     Returns:
-        Dict containing schedule data for all queues in the region, or None on error
+        Dict containing full data from GitHub, or None on error
         
-    Example response:
+    Example response structure:
         {
-            "1.1": {
-                "schedule": [...],
-                "last_updated": "2026-02-17T09:00:00Z"
-            },
-            "1.2": {...},
-            ...
+            "regionId": "kyiv-region",
+            "lastUpdated": "2026-02-17T09:51:17.242Z",
+            "fact": {
+                "data": {
+                    "1771279200": {  # timestamp
+                        "GPV1.1": { "1": "yes", "2": "yes", ... },  # hour-by-hour
+                        "GPV1.2": { ... },
+                        ...
+                    }
+                }
+            }
         }
     """
     if region_key not in REGION_TO_FILE:
@@ -72,7 +84,7 @@ async def fetch_region_schedules(region_key: str) -> Optional[Dict[str, Any]]:
             return None
         
         data = json.loads(stdout.decode())
-        logger.info("Successfully fetched schedule data for %s (%d queues)", region_key, len(data))
+        logger.info("Successfully fetched schedule data for %s", region_key)
         return data
         
     except json.JSONDecodeError as e:
@@ -86,6 +98,9 @@ async def fetch_region_schedules(region_key: str) -> Optional[Dict[str, Any]]:
 async def get_queue_schedule(region_key: str, queue_number: str) -> Optional[Dict[str, Any]]:
     """Get schedule for a specific queue.
     
+    NOTE: This is a stub implementation. The actual data format from GitHub
+    uses "GPV" prefixes and requires more complex parsing.
+    
     Args:
         region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
         queue_number: Queue number (e.g., "3.1", "1.2")
@@ -98,11 +113,18 @@ async def get_queue_schedule(region_key: str, queue_number: str) -> Optional[Dic
     if not schedules:
         return None
     
-    return schedules.get(queue_number)
+    # TODO: Parse the actual GitHub data format
+    # The data uses "GPV" prefix, e.g., "GPV3.1" instead of "3.1"
+    # and has a nested timestamp-based structure
+    
+    logger.warning("get_queue_schedule is not fully implemented - data format needs parsing")
+    return None
 
 
 async def verify_queue_number(region_key: str, queue_number: str) -> bool:
     """Verify that a queue number exists in the GitHub data.
+    
+    NOTE: This is a stub implementation. Always returns True for now.
     
     This can be used to validate queue numbers returned by the DTEK scraper.
     
@@ -111,57 +133,26 @@ async def verify_queue_number(region_key: str, queue_number: str) -> bool:
         queue_number: Queue number to verify (e.g., "3.1")
         
     Returns:
-        True if queue exists, False otherwise
+        True (always, until parsing is implemented)
     """
-    schedules = await fetch_region_schedules(region_key)
-    
-    if not schedules:
-        # If we can't fetch data, assume the queue is valid
-        logger.warning("Could not verify queue %s for %s (GitHub data unavailable)", 
-                      queue_number, region_key)
-        return True
-    
-    exists = queue_number in schedules
-    
-    if not exists:
-        logger.warning("Queue %s not found in GitHub data for %s", queue_number, region_key)
-    
-    return exists
+    # For now, just return True - we don't want to block valid queue numbers
+    # TODO: Implement parsing of GitHub data format with GPV prefixes
+    logger.debug("verify_queue_number called for %s in %s (stub implementation)", 
+                queue_number, region_key)
+    return True
 
 
 async def format_queue_schedule(region_key: str, queue_number: str) -> Optional[str]:
     """Format schedule for a queue as human-readable text.
+    
+    NOTE: This is a stub implementation.
     
     Args:
         region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
         queue_number: Queue number (e.g., "3.1")
         
     Returns:
-        Formatted schedule text, or None if not available
+        None (until parsing is implemented)
     """
-    schedule_data = await get_queue_schedule(region_key, queue_number)
-    
-    if not schedule_data:
-        return None
-    
-    schedule = schedule_data.get("schedule", [])
-    last_updated = schedule_data.get("last_updated", "невідомо")
-    
-    if not schedule:
-        return f"📅 Розклад для черги {queue_number}:\nДані відсутні"
-    
-    lines = [f"📅 Розклад для черги {queue_number}:"]
-    
-    for entry in schedule[:7]:  # Show up to 7 days
-        date = entry.get("date", "")
-        hours = entry.get("outage_hours", [])
-        
-        if hours:
-            hours_str = ", ".join(f"{h[0]}-{h[1]}" for h in hours)
-            lines.append(f"  {date}: {hours_str}")
-        else:
-            lines.append(f"  {date}: немає відключень")
-    
-    lines.append(f"\n🕒 Оновлено: {last_updated}")
-    
-    return "\n".join(lines)
+    logger.warning("format_queue_schedule is not fully implemented")
+    return None

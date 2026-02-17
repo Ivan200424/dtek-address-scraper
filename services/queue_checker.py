@@ -422,18 +422,19 @@ async def _get_queue_number_form_interaction(
                 
                 if building_select:
                     logger.info("Found building select dropdown")
-                    # Use f-string to inject the selector constant into JavaScript
-                    options_data = await page.evaluate(f'''() => {{
-                        const select = document.querySelector('{BUILDING_SELECT_SELECTOR}');
+                    # Get all options from the building select dropdown
+                    options_data = await page.evaluate('''() => {
+                        const selector = 'select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]';
+                        const select = document.querySelector(selector);
                         if (!select) return null;
                         
-                        const options = Array.from(select.options).map(opt => ({{
+                        const options = Array.from(select.options).map(opt => ({
                             value: opt.value,
                             text: opt.textContent.trim(),
-                        }})));
+                        }));
                         
                         return options;
-                    }}''')
+                    }''')
                     
                     if options_data:
                         logger.debug("Found %d building options", len(options_data))
@@ -444,9 +445,19 @@ async def _get_queue_number_form_interaction(
                             option_value = option.get('value', '')
                             
                             # Check if this option matches our building
-                            if building in option_text or building == option_value:
-                                logger.info("Found building in option: %s", option_text)
+                            # Use exact match for option_value, and word boundary match for option_text
+                            # This prevents partial matches like '1' matching '10', '11', etc.
+                            if building == option_value:
+                                logger.info("Found building by value match: %s", option_text)
                                 # Try to extract queue number from text
+                                queue_match = re.search(r'(\d+\.\d+)', option_text)
+                                if queue_match:
+                                    queue_number = queue_match.group(1)
+                                    logger.info("Extracted queue number from form: %s", queue_number)
+                                    return {"queue": queue_number, "error": None}
+                            # Also check if building appears as a word in option text (with word boundaries)
+                            elif re.search(rf'\b{re.escape(building)}\b', option_text):
+                                logger.info("Found building by text match: %s", option_text)
                                 queue_match = re.search(r'(\d+\.\d+)', option_text)
                                 if queue_match:
                                     queue_number = queue_match.group(1)

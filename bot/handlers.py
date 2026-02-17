@@ -32,6 +32,10 @@ logger = logging.getLogger("bot.handlers")
 # Conversation states for address addition
 SELECT_REGION, ENTER_CITY, ENTER_STREET, ENTER_BUILDING, CONFIRM_ADDRESS = range(5)
 
+# Debug command constants
+MAX_FORM_ELEMENTS_DISPLAYED = 10  # Maximum number of form elements to show in debug output
+MAX_PLACEHOLDER_LENGTH = 30  # Maximum length of placeholder text to display
+
 
 def get_db(context: ContextTypes.DEFAULT_TYPE) -> Database:
     """Get database from bot context."""
@@ -791,7 +795,7 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             
         if form_elements and len(form_elements) > 0:
             results.append(f"✅ Знайдено {len(form_elements)} елементів форми:")
-            for i, elem in enumerate(form_elements[:10], 1):  # Show first 10
+            for i, elem in enumerate(form_elements[:MAX_FORM_ELEMENTS_DISPLAYED], 1):
                 elem_desc = f"  {i}. {elem['tag']}"
                 if elem['type'] != 'N/A':
                     elem_desc += f"[type={elem['type']}]"
@@ -800,10 +804,10 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 if elem['name'] != 'N/A':
                     elem_desc += f" name={elem['name']}"
                 if elem['placeholder'] != 'N/A':
-                    elem_desc += f" placeholder='{elem['placeholder'][:30]}'"
+                    elem_desc += f" placeholder='{elem['placeholder'][:MAX_PLACEHOLDER_LENGTH]}'"
                 results.append(elem_desc)
-            if len(form_elements) > 10:
-                results.append(f"  ... та ще {len(form_elements) - 10} елементів")
+            if len(form_elements) > MAX_FORM_ELEMENTS_DISPLAYED:
+                results.append(f"  ... та ще {len(form_elements) - MAX_FORM_ELEMENTS_DISPLAYED} елементів")
         else:
             results.append("⚠️ Елементи форми не знайдено")
     except Exception as e:

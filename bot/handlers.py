@@ -231,16 +231,21 @@ async def building_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Get queue number using AJAX approach
     await update.message.reply_text("🔍 Перевіряю номер черги відключення...")
     try:
-        queue_number = await get_queue_number(region_key, city, street, building)
+        queue_result = await get_queue_number(region_key, city, street, building)
+        queue_number = queue_result.get("queue")
+        error = queue_result.get("error")
+        
         context.user_data["queue_number"] = queue_number
 
-        if queue_number and queue_number != "невідомо":
+        if queue_number:
             queue_info = f"🔢 Черга відключення: {queue_number}"
+        elif error:
+            queue_info = f"🔢 Черга відключення: невідомо\n⚠️ Причина: {error}"
         else:
             queue_info = "🔢 Черга відключення: невідомо"
     except Exception as e:
         logger.error("Error getting queue number: %s", e, exc_info=True)
-        queue_info = "🔢 Черга відключення: невідомо"
+        queue_info = f"🔢 Черга відключення: невідомо\n⚠️ Помилка: {str(e)}"
         context.user_data["queue_number"] = None
 
     await update.message.reply_text(
@@ -599,6 +604,119 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(messages.ERROR_MESSAGE)
 
 
+async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Test DTEK connection and report results in chat.
+    
+    This diagnostic command helps users troubleshoot queue detection issues
+    by testing various components of the system.
+    """
+    msg = await update.message.reply_text("🔍 Тестую з'єднання з ДТЕК...\n\nЦе може зайняти до хвилини.")
+    
+    results = []
+    
+    # Test 1: Can Playwright launch?
+    results.append("**Тест 1: Запуск браузера**")
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            await browser.close()
+        results.append("✅ Браузер Playwright запущено успішно")
+    except Exception as e:
+        results.append(f"❌ Помилка запуску браузера: {str(e)}")
+        await msg.edit_text("\n".join(results) + "\n\n⚠️ Критична помилка. Подальші тести пропущено.")
+        return
+    
+    # Test 2: Can we reach dtek-krem.com.ua?
+    results.append("\n**Тест 2: З'єднання з ДТЕК (Київська область)**")
+    try:
+        from playwright.async_api import async_playwright
+        from config.regions import REGIONS
+        
+        test_url = REGIONS["kyiv_region"]["url"]
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="uk-UA",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+            
+            await page.goto(test_url, timeout=60000, wait_until="networkidle")
+            content = await page.content()
+            
+            await browser.close()
+            
+        results.append(f"✅ Сторінка завантажена ({len(content)} байт)")
+    except Exception as e:
+        results.append(f"❌ Не вдалося завантажити сторінку: {str(e)}")
+        await msg.edit_text("\n".join(results) + "\n\n⚠️ Не вдалося підключитися до ДТЕК. Перевірте інтернет-з'єднання.")
+        return
+    
+    # Test 3: Can we get CSRF token?
+    results.append("\n**Тест 3: Отримання CSRF токену**")
+    try:
+        from playwright.async_api import async_playwright
+        from config.regions import REGIONS
+        
+        test_url = REGIONS["kyiv_region"]["url"]
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="uk-UA",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+            
+            await page.goto(test_url, timeout=60000, wait_until="networkidle")
+            csrf_token = await page.evaluate(
+                "() => document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')"
+            )
+            
+            await browser.close()
+            
+        if csrf_token:
+            results.append(f"✅ CSRF токен отримано (довжина: {len(csrf_token)})")
+        else:
+            results.append("❌ CSRF токен не знайдено на сторінці")
+    except Exception as e:
+        results.append(f"❌ Помилка отримання CSRF токену: {str(e)}")
+    
+    # Test 4: Can getStreet API work?
+    results.append("\n**Тест 4: API пошуку вулиці**")
+    try:
+        from services.queue_checker import get_queue_number
+        
+        # Test with a known address in Kyiv region
+        test_result = await get_queue_number(
+            region_key="kyiv_region",
+            city="с. Нижча Дубечня",
+            street="Деснянська",
+            building="1"
+        )
+        
+        if test_result["queue"]:
+            results.append(f"✅ API працює. Тестова адреса: черга {test_result['queue']}")
+        elif test_result["error"]:
+            results.append(f"⚠️ API відповів з помилкою: {test_result['error']}")
+        else:
+            results.append("⚠️ API працює, але не повернув результат")
+    except Exception as e:
+        results.append(f"❌ Помилка тесту API: {str(e)}")
+    
+    # Send final results
+    final_text = "\n".join(results)
+    final_text += "\n\n**Діагностика завершена**"
+    final_text += "\n\nЯкщо всі тести пройшли успішно, спробуйте додати адресу ще раз."
+    final_text += "\nЯкщо проблема залишається, зверніться до розробників."
+    
+    await msg.edit_text(final_text, parse_mode="Markdown")
+
+
 # ==================== Menu Text Handlers ====================
 
 async def menu_text_handler(
@@ -732,6 +850,7 @@ def register_handlers(app) -> None:
     app.add_handler(CommandHandler("my_addresses", my_addresses_handler))
     app.add_handler(CommandHandler("delete_address", delete_address_start))
     app.add_handler(CommandHandler("status", status_handler))
+    app.add_handler(CommandHandler("debug", debug_handler))
 
     # Callback handlers for address deletion
     app.add_handler(CallbackQueryHandler(delete_address_callback, pattern=r"^delete_\d+$"))

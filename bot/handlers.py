@@ -756,6 +756,59 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         results.append(f"❌ Помилка повного тесту: {str(e)}")
     
+    # Test 6: Form structure inspection
+    results.append("\nТест 6: Інспекція форми ДТЕК")
+    try:
+        from playwright.async_api import async_playwright
+        from config.regions import REGIONS
+        
+        test_url = REGIONS["kyiv_region"]["url"]
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="uk-UA",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+            
+            await page.goto(test_url, timeout=60000, wait_until="networkidle")
+            
+            # Get all input and select elements
+            form_elements = await page.evaluate('''() => {
+                return Array.from(document.querySelectorAll('input, select, textarea')).map(el => ({
+                    tag: el.tagName.toLowerCase(),
+                    type: el.type || 'N/A',
+                    name: el.name || 'N/A',
+                    id: el.id || 'N/A',
+                    className: el.className || 'N/A',
+                    placeholder: el.placeholder || 'N/A',
+                }));
+            }''')
+            
+            await browser.close()
+            
+        if form_elements and len(form_elements) > 0:
+            results.append(f"✅ Знайдено {len(form_elements)} елементів форми:")
+            for i, elem in enumerate(form_elements[:10], 1):  # Show first 10
+                elem_desc = f"  {i}. {elem['tag']}"
+                if elem['type'] != 'N/A':
+                    elem_desc += f"[type={elem['type']}]"
+                if elem['id'] != 'N/A':
+                    elem_desc += f" id={elem['id']}"
+                if elem['name'] != 'N/A':
+                    elem_desc += f" name={elem['name']}"
+                if elem['placeholder'] != 'N/A':
+                    elem_desc += f" placeholder='{elem['placeholder'][:30]}'"
+                results.append(elem_desc)
+            if len(form_elements) > 10:
+                results.append(f"  ... та ще {len(form_elements) - 10} елементів")
+        else:
+            results.append("⚠️ Елементи форми не знайдено")
+    except Exception as e:
+        results.append(f"❌ Помилка інспекції форми: {str(e)}")
+    
     # Send final results
     final_text = "\n".join(results)
     final_text += "\n\n📋 Діагностика завершена"

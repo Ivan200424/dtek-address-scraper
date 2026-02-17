@@ -1,16 +1,25 @@
-"""Queue checker service using AJAX API approach.
+"""Queue checker service using form interaction (primary) with AJAX fallback.
 
-This module uses the 3-step DTEK API chain:
+This module implements two approaches to get queue numbers:
+
+PRIMARY: Form interaction (like a real user)
+1. Navigate to DTEK shutdowns page
+2. Fill city autocomplete (for non-Kyiv regions)
+3. Fill street autocomplete
+4. Extract queue from building list
+
+FALLBACK: AJAX API approach
 1. getCity - Search for city by name, returns cityId
 2. getStreet - Search for street using cityId, returns exact street name
 3. getHomeNum - Get building data using cityId and street, returns queue groups
 
 Based on the working approach from https://github.com/mr-devboy/dtek-monitor
-Updated to use the correct API format as required by DTEK regional sites.
+Updated to prioritize form interaction for better reliability.
 """
 
 import asyncio
 import logging
+import re
 from typing import Optional, Dict, Any
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
@@ -219,26 +228,289 @@ async def search_street(
         return None, None
 
 
+async def _get_queue_number_form_interaction(
+    region_key: str,
+    base_url: str,
+    city: Optional[str],
+    street: str,
+    building: str,
+) -> Dict[str, Any]:
+    """Get queue number by interacting with DTEK form like a real user.
+    
+    This approach fills in the form on the DTEK shutdowns page exactly like a human would:
+    1. Navigate to shutdowns page
+    2. Find and fill city autocomplete (for non-Kyiv regions)
+    3. Wait for suggestions and click first match
+    4. Find and fill street autocomplete
+    5. Wait for suggestions and click first match
+    6. Extract queue number from building list
+    
+    Args:
+        region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
+        base_url: Base URL of DTEK website
+        city: City name (can be None for Kyiv)
+        street: Street name
+        building: Building number
+        
+    Returns:
+        Dict with 'queue', 'error', and optionally 'no_retry' keys
+    """
+    is_kyiv = region_key == "kyiv"
+    clean_city = strip_prefix(city, CITY_PREFIXES) if city else None
+    clean_street = strip_prefix(street, STREET_PREFIXES)
+    
+    logger.info(
+        "Form interaction: Getting queue for %s, %s, %s (region: %s)",
+        clean_city, clean_street, building, region_key
+    )
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="uk-UA",
+                user_agent=USER_AGENT,
+            )
+            page = await context.new_page()
+            
+            try:
+                # Step 1: Navigate to shutdowns page
+                logger.info("Opening page: %s", base_url)
+                await page.goto(base_url, timeout=NAVIGATION_TIMEOUT, wait_until="networkidle")
+                logger.info("Page loaded successfully")
+                
+                # Check for suspect HTML
+                content = await page.content()
+                if len(content) < 1000:
+                    logger.warning("Suspect HTML: page content too small (%d bytes)", len(content))
+                    return {"queue": None, "error": "Page loaded but content seems incomplete"}
+                
+                # Step 2: For non-Kyiv regions, find and fill city input
+                if not is_kyiv and clean_city:
+                    logger.info("Searching for city input field...")
+                    
+                    # Try to find city input using common selectors
+                    city_input = None
+                    city_selectors = [
+                        'input[name*="city" i]',
+                        'input[id*="city" i]',
+                        'input[placeholder*="місто" i]',
+                        'input[placeholder*="населений" i]',
+                    ]
+                    
+                    for selector in city_selectors:
+                        try:
+                            city_input = await page.wait_for_selector(selector, timeout=5000)
+                            if city_input:
+                                logger.info("Found city input with selector: %s", selector)
+                                break
+                        except:
+                            continue
+                    
+                    if not city_input:
+                        logger.warning("City input not found, trying AJAX fallback")
+                        return {"queue": None, "error": "City input field not found on page"}
+                    
+                    # Clear and type city name
+                    await city_input.click()
+                    await city_input.fill("")
+                    await city_input.type(clean_city, delay=100)
+                    logger.info("Typed city: %s", clean_city)
+                    
+                    # Wait for autocomplete dropdown to appear
+                    await page.wait_for_timeout(1500)
+                    
+                    # Try to find and click autocomplete suggestion
+                    autocomplete_selectors = [
+                        '.ui-menu-item:first-child',
+                        '.ui-autocomplete li:first-child',
+                        '[role="option"]:first-child',
+                        '.autocomplete-item:first-child',
+                        '.suggestion:first-child',
+                    ]
+                    
+                    suggestion_clicked = False
+                    for selector in autocomplete_selectors:
+                        try:
+                            suggestion = await page.wait_for_selector(selector, timeout=3000)
+                            if suggestion:
+                                await suggestion.click()
+                                logger.info("Clicked city suggestion with selector: %s", selector)
+                                suggestion_clicked = True
+                                break
+                        except:
+                            continue
+                    
+                    if not suggestion_clicked:
+                        logger.warning("City autocomplete suggestion not found")
+                        # Continue anyway, the input might be accepted as-is
+                    
+                    # Wait for city selection to process
+                    await page.wait_for_timeout(1000)
+                
+                # Step 3: Find and fill street input
+                logger.info("Searching for street input field...")
+                
+                street_input = None
+                street_selectors = [
+                    'input[name*="street" i]',
+                    'input[id*="street" i]',
+                    'input[placeholder*="вулиц" i]',
+                    'input[placeholder*="street" i]',
+                ]
+                
+                for selector in street_selectors:
+                    try:
+                        street_input = await page.wait_for_selector(selector, timeout=5000)
+                        if street_input:
+                            logger.info("Found street input with selector: %s", selector)
+                            break
+                    except:
+                        continue
+                
+                if not street_input:
+                    logger.warning("Street input not found, trying AJAX fallback")
+                    return {"queue": None, "error": "Street input field not found on page"}
+                
+                # Clear and type street name
+                await street_input.click()
+                await street_input.fill("")
+                await street_input.type(clean_street, delay=100)
+                logger.info("Typed street: %s", clean_street)
+                
+                # Wait for autocomplete dropdown to appear
+                await page.wait_for_timeout(1500)
+                
+                # Try to find and click autocomplete suggestion
+                suggestion_clicked = False
+                for selector in autocomplete_selectors:
+                    try:
+                        suggestion = await page.wait_for_selector(selector, timeout=3000)
+                        if suggestion:
+                            await suggestion.click()
+                            logger.info("Clicked street suggestion with selector: %s", selector)
+                            suggestion_clicked = True
+                            break
+                    except:
+                        continue
+                
+                if not suggestion_clicked:
+                    logger.warning("Street autocomplete suggestion not found")
+                    # Continue anyway
+                
+                # Wait for street selection to process and building list to load
+                await page.wait_for_timeout(2000)
+                
+                # Step 4: Try to find the building in the page and extract queue number
+                logger.info("Searching for building: %s", building)
+                
+                # Try to extract building data from the page
+                # The exact structure depends on how DTEK displays results
+                # We'll try multiple approaches
+                
+                # Approach 1: Look for building in a select dropdown
+                building_select = None
+                try:
+                    building_select = await page.wait_for_selector('select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]', timeout=3000)
+                except:
+                    pass
+                
+                if building_select:
+                    logger.info("Found building select dropdown")
+                    options_data = await page.evaluate('''(building) => {
+                        const select = document.querySelector('select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]');
+                        if (!select) return null;
+                        
+                        const options = Array.from(select.options).map(opt => ({
+                            value: opt.value,
+                            text: opt.textContent.trim(),
+                        }));
+                        
+                        return options;
+                    }''', building)
+                    
+                    if options_data:
+                        logger.debug("Found %d building options", len(options_data))
+                        # Try to find building and extract queue from option text
+                        # Format might be like "1 - черга 3.1" or "буд. 1 (3.1)"
+                        for option in options_data:
+                            option_text = option.get('text', '')
+                            option_value = option.get('value', '')
+                            
+                            # Check if this option matches our building
+                            if building in option_text or building == option_value:
+                                logger.info("Found building in option: %s", option_text)
+                                # Try to extract queue number from text
+                                import re
+                                queue_match = re.search(r'(\d+\.\d+)', option_text)
+                                if queue_match:
+                                    queue_number = queue_match.group(1)
+                                    logger.info("Extracted queue number from form: %s", queue_number)
+                                    return {"queue": queue_number, "error": None}
+                
+                # Approach 2: Look for building data in page text/elements
+                page_text = await page.evaluate('() => document.body.innerText')
+                logger.debug("Page text length: %d", len(page_text))
+                
+                # Try to find building and queue in page text
+                # This is a fallback if we can't interact with form elements
+                import re
+                # Look for patterns like "будинок 1 - черга 3.1" or "1 (3.1)"
+                patterns = [
+                    rf'{building}\s*[-–—]\s*черга\s*(\d+\.\d+)',
+                    rf'{building}\s*\((\d+\.\d+)\)',
+                    rf'будинок\s*{building}.*?(\d+\.\d+)',
+                    rf'буд\.\s*{building}.*?(\d+\.\d+)',
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, page_text, re.IGNORECASE)
+                    if match:
+                        queue_number = match.group(1)
+                        logger.info("Extracted queue from page text: %s", queue_number)
+                        return {"queue": queue_number, "error": None}
+                
+                logger.warning("Could not extract queue number from form interaction")
+                return {"queue": None, "error": "Building not found in form results"}
+                
+            except PlaywrightTimeoutError as e:
+                logger.error("Timeout during form interaction: %s", e)
+                return {"queue": None, "error": f"Timeout during form interaction"}
+            except Exception as e:
+                logger.error("Error during form interaction: %s", e, exc_info=True)
+                return {"queue": None, "error": f"Error during form interaction: {str(e)}"}
+            finally:
+                await browser.close()
+                
+    except Exception as e:
+        logger.error("Error launching Playwright for form interaction: %s", e, exc_info=True)
+        return {"queue": None, "error": f"Failed to launch browser: {str(e)}"}
+
+
 async def get_queue_number(
     region_key: str,
     city: Optional[str],
     street: str,
     building: str,
 ) -> Dict[str, Any]:
-    """Get queue number for address using AJAX API with retry logic.
+    """Get queue number for address using form interaction (primary) with AJAX fallback.
     
-    This function implements the 3-step DTEK API chain:
-    1. Opens the DTEK shutdowns page via Playwright
-    2. Extracts CSRF token from meta tag
-    3. For non-Kyiv regions: Calls getCity API to get cityId
-    4. Calls getStreet API (with cityId for non-Kyiv) to resolve exact street name
-    5. Makes POST request to /ua/ajax with method=getHomeNum using cityId and exact street
-    6. Parses JSON response to extract queue number from response.data[building].group
+    This function first tries to interact with the DTEK form like a real user:
+    1. Navigate to shutdowns page
+    2. Fill city autocomplete (for non-Kyiv)
+    3. Fill street autocomplete
+    4. Extract queue from building list
+    
+    If form interaction fails, it falls back to the AJAX API approach:
+    1. Extract CSRF token
+    2. Call getCity -> getStreet -> getHomeNum API chain
+    3. Parse JSON response
     
     Args:
         region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
         city: City name (can be None for Kyiv)
-        street: Street name (will be resolved via getCity -> getStreet API chain)
+        street: Street name
         building: Building number
         
     Returns:
@@ -258,7 +530,18 @@ async def get_queue_number(
         city, street, building, region_key
     )
     
-    # Retry loop
+    # First, try form interaction approach (primary method)
+    logger.info("Trying form interaction approach...")
+    form_result = await _get_queue_number_form_interaction(region_key, base_url, city, street, building)
+    
+    if form_result["queue"] is not None:
+        logger.info("Form interaction succeeded, queue: %s", form_result["queue"])
+        return form_result
+    
+    # If form interaction failed, log and try AJAX fallback
+    logger.warning("Form interaction failed: %s. Trying AJAX fallback...", form_result.get("error"))
+    
+    # Retry loop for AJAX approach
     for attempt in range(MAX_RETRIES):
         try:
             result = await _get_queue_number_attempt(region_key, base_url, city, street, building)
@@ -269,17 +552,17 @@ async def get_queue_number(
             if attempt < MAX_RETRIES - 1:
                 delay = INITIAL_RETRY_DELAY * (RETRY_BACKOFF_MULTIPLIER ** attempt)
                 logger.warning(
-                    "Attempt %d/%d failed: %s. Retrying in %.1f seconds...",
+                    "AJAX attempt %d/%d failed: %s. Retrying in %.1f seconds...",
                     attempt + 1, MAX_RETRIES, result["error"], delay
                 )
                 await asyncio.sleep(delay)
             else:
                 # Last attempt failed
-                logger.error("All %d attempts failed. Last error: %s", MAX_RETRIES, result["error"])
+                logger.error("All %d AJAX attempts failed. Last error: %s", MAX_RETRIES, result["error"])
                 return result
                 
         except Exception as e:
-            error_msg = f"Unexpected error on attempt {attempt + 1}: {str(e)}"
+            error_msg = f"Unexpected error on AJAX attempt {attempt + 1}: {str(e)}"
             logger.error(error_msg, exc_info=True)
             
             if attempt < MAX_RETRIES - 1:
@@ -289,7 +572,7 @@ async def get_queue_number(
             else:
                 return {"queue": None, "error": error_msg}
     
-    return {"queue": None, "error": "Max retries exceeded"}
+    return {"queue": None, "error": "All methods failed (form interaction + AJAX)"}
 
 
 async def _get_queue_number_attempt(

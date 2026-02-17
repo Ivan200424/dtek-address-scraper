@@ -304,6 +304,8 @@ async def _get_queue_number_attempt(
     Returns:
         Dict with 'queue', 'error', and optionally 'no_retry' keys
     """
+    
+    is_kyiv = region_key == "kyiv"
 
     try:
         async with async_playwright() as p:
@@ -343,7 +345,6 @@ async def _get_queue_number_attempt(
                 exact_street, city_id = await search_street(page, csrf_token, region_key, city, street)
                 
                 # Check if city lookup failed for non-Kyiv regions
-                is_kyiv = region_key == "kyiv"
                 if not is_kyiv and city and city_id is None:
                     logger.error("City not found in DTEK database: '%s'", city)
                     return {"queue": None, "error": f"City '{city}' not found in DTEK database", "no_retry": True}

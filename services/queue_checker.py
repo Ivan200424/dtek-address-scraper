@@ -4,8 +4,9 @@ This module uses direct AJAX requests to DTEK API instead of form filling.
 Based on the working approach from https://github.com/mr-devboy/dtek-monitor
 """
 
+import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -16,6 +17,14 @@ logger = logging.getLogger("services.queue_checker")
 # Timeouts for Playwright operations (milliseconds)
 NAVIGATION_TIMEOUT = 60000  # 60 seconds
 AJAX_TIMEOUT = 30000  # 30 seconds
+
+# Retry configuration
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 2  # seconds
+RETRY_BACKOFF_MULTIPLIER = 2
+
+# User-Agent to avoid anti-bot detection
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
 # Prefixes to strip from city and street names
 CITY_PREFIXES = ["м. ", "с. ", "смт. ", "с-ще. "]
@@ -125,8 +134,8 @@ async def get_queue_number(
     city: Optional[str],
     street: str,
     building: str,
-) -> Optional[str]:
-    """Get queue number for address using AJAX API.
+) -> Dict[str, Any]:
+    """Get queue number for address using AJAX API with retry logic.
     
     This function:
     1. Opens the DTEK shutdowns page via Playwright
@@ -142,11 +151,14 @@ async def get_queue_number(
         building: Building number
         
     Returns:
-        Queue number as string or None if not found
+        Dict with 'queue' and 'error' keys:
+        - {"queue": "3.1", "error": None} on success
+        - {"queue": None, "error": "Error description"} on failure
     """
     if region_key not in REGIONS:
-        logger.error("Unknown region: %s", region_key)
-        return None
+        error_msg = f"Unknown region: {region_key}"
+        logger.error(error_msg)
+        return {"queue": None, "error": error_msg}
 
     base_url = REGIONS[region_key]["url"]
 
@@ -154,6 +166,53 @@ async def get_queue_number(
         "Getting queue number for %s, %s, %s (region: %s)",
         city, street, building, region_key
     )
+    
+    # Retry loop
+    for attempt in range(MAX_RETRIES):
+        try:
+            result = await _get_queue_number_attempt(region_key, base_url, city, street, building)
+            if result["queue"] is not None or result.get("no_retry"):
+                return result
+            
+            # If we got an error but should retry
+            if attempt < MAX_RETRIES - 1:
+                delay = INITIAL_RETRY_DELAY * (RETRY_BACKOFF_MULTIPLIER ** attempt)
+                logger.warning(
+                    "Attempt %d/%d failed: %s. Retrying in %.1f seconds...",
+                    attempt + 1, MAX_RETRIES, result["error"], delay
+                )
+                await asyncio.sleep(delay)
+            else:
+                # Last attempt failed
+                logger.error("All %d attempts failed. Last error: %s", MAX_RETRIES, result["error"])
+                return result
+                
+        except Exception as e:
+            error_msg = f"Unexpected error on attempt {attempt + 1}: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            
+            if attempt < MAX_RETRIES - 1:
+                delay = INITIAL_RETRY_DELAY * (RETRY_BACKOFF_MULTIPLIER ** attempt)
+                logger.warning("Retrying in %.1f seconds...", delay)
+                await asyncio.sleep(delay)
+            else:
+                return {"queue": None, "error": error_msg}
+    
+    return {"queue": None, "error": "Max retries exceeded"}
+
+
+async def _get_queue_number_attempt(
+    region_key: str,
+    base_url: str,
+    city: Optional[str],
+    street: str,
+    building: str,
+) -> Dict[str, Any]:
+    """Single attempt to get queue number.
+    
+    Returns:
+        Dict with 'queue', 'error', and optionally 'no_retry' keys
+    """
 
     try:
         async with async_playwright() as p:
@@ -161,14 +220,21 @@ async def get_queue_number(
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 720},
                 locale="uk-UA",
+                user_agent=USER_AGENT,
             )
             page = await context.new_page()
 
             try:
                 # Step 1: Open the shutdowns page and wait for full load
                 logger.info("Opening page: %s", base_url)
-                await page.goto(base_url, timeout=NAVIGATION_TIMEOUT, wait_until="load")
+                await page.goto(base_url, timeout=NAVIGATION_TIMEOUT, wait_until="networkidle")
                 logger.info("Page loaded successfully")
+                
+                # Check for suspect HTML (too small response, missing expected elements)
+                content = await page.content()
+                if len(content) < 1000:
+                    logger.warning("Suspect HTML: page content too small (%d bytes)", len(content))
+                    return {"queue": None, "error": "Page loaded but content seems incomplete"}
 
                 # Step 2: Extract CSRF token
                 csrf_token = await page.evaluate(
@@ -177,7 +243,7 @@ async def get_queue_number(
                 
                 if not csrf_token:
                     logger.error("CSRF token not found on page")
-                    return None
+                    return {"queue": None, "error": "CSRF token not found on page"}
 
                 logger.info("CSRF token obtained")
 
@@ -185,8 +251,11 @@ async def get_queue_number(
                 # This ensures we use the correct name from DTEK's database
                 exact_street = await search_street(page, csrf_token, region_key, city, street)
                 
+                # Track if street was found in DTEK database
+                street_not_found = exact_street is None
+                
                 # If street resolution failed, fall back to cleaned user input
-                if not exact_street:
+                if street_not_found:
                     logger.warning("Street resolution failed, using cleaned user input")
                     exact_street = strip_prefix(street, STREET_PREFIXES)
                 
@@ -241,15 +310,17 @@ async def get_queue_number(
                 # Response format: { data: { "1": { group: "2.1", ... }, "2": { ... } }, ... }
                 # The building number is the key in the data object
                 if not response_data or "data" not in response_data:
-                    logger.warning("No 'data' field in response for %s, %s, %s", clean_city, clean_street, building)
+                    logger.warning("No 'data' field in response for %s, %s, %s", clean_city, exact_street, building)
                     logger.debug("Full response: %s", response_data)
-                    return None
+                    if street_not_found:
+                        return {"queue": None, "error": "Street not found in DTEK database", "no_retry": True}
+                    return {"queue": None, "error": "No data returned from DTEK API"}
 
                 data = response_data["data"]
                 
                 if not isinstance(data, dict):
                     logger.warning("Response 'data' is not a dict: %s", type(data))
-                    return None
+                    return {"queue": None, "error": "Invalid response format from DTEK API"}
                 
                 logger.info("Response contains %d building entries", len(data))
                 logger.debug("Available buildings in response: %s", list(data.keys())[:20])
@@ -275,7 +346,7 @@ async def get_queue_number(
                         "Building '%s' not found in response data. Available keys: %s",
                         building, list(data.keys())[:20]
                     )
-                    return None
+                    return {"queue": None, "error": f"Building {building} not found at this address", "no_retry": True}
 
                 # Extract group (queue number) from house data
                 if isinstance(house_data, dict):
@@ -283,23 +354,23 @@ async def get_queue_number(
                     if group:
                         queue_number = str(group)
                         logger.info("Found queue number: %s for building %s", queue_number, building)
-                        return queue_number
+                        return {"queue": queue_number, "error": None}
                     else:
                         logger.warning("No 'group' field in house data: %s", house_data)
-                        return None
+                        return {"queue": None, "error": "No queue information available for this building", "no_retry": True}
                 else:
                     logger.warning("House data is not a dict: %s", type(house_data))
-                    return None
+                    return {"queue": None, "error": "Invalid building data format"}
 
             except PlaywrightTimeoutError as e:
                 logger.error("Timeout loading page %s: %s", base_url, e)
-                return None
+                return {"queue": None, "error": f"Timeout loading DTEK website"}
             except Exception as e:
                 logger.error("Error getting queue number: %s", e, exc_info=True)
-                return None
+                return {"queue": None, "error": f"Error during page interaction: {str(e)}"}
             finally:
                 await browser.close()
 
     except Exception as e:
         logger.error("Error launching Playwright: %s", e, exc_info=True)
-        return None
+        return {"queue": None, "error": f"Failed to launch browser: {str(e)}"}

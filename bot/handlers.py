@@ -686,8 +686,56 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         results.append(f"❌ Помилка отримання CSRF токену: {str(e)}")
     
-    # Test 4: Can getStreet API work?
-    results.append("\nТест 4: API пошуку вулиці")
+    # Test 4: Can we test the 3-step API chain?
+    results.append("\nТест 4: 3-крокова API система ДТЕК")
+    results.append("Testing getCity -> getStreet -> getHomeNum chain...")
+    try:
+        from playwright.async_api import async_playwright
+        from config.regions import REGIONS
+        from services.queue_checker import get_city, search_street
+        
+        test_url = REGIONS["kyiv_region"]["url"]
+        test_city = "с. Нижча Дубечня"
+        test_street = "Деснянська"
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="uk-UA",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+            
+            await page.goto(test_url, timeout=60000, wait_until="networkidle")
+            csrf_token = await page.evaluate(
+                "() => document.querySelector('meta[name=\"csrf-token\"]')?.getAttribute('content')"
+            )
+            
+            if not csrf_token:
+                results.append("❌ Не вдалося отримати CSRF токен")
+            else:
+                # Step 4a: Test getCity
+                city_id = await get_city(page, csrf_token, test_city)
+                if city_id:
+                    results.append(f"✅ getCity: Знайдено місто з ID: {city_id}")
+                else:
+                    results.append(f"⚠️ getCity: Місто '{test_city}' не знайдено")
+                
+                # Step 4b: Test getStreet
+                exact_street, returned_city_id = await search_street(page, csrf_token, "kyiv_region", test_city, test_street)
+                if exact_street:
+                    results.append(f"✅ getStreet: Знайдено вулицю: '{exact_street}'")
+                else:
+                    results.append(f"⚠️ getStreet: Вулицю '{test_street}' не знайдено")
+            
+            await browser.close()
+            
+    except Exception as e:
+        results.append(f"❌ Помилка тесту 3-крокової API: {str(e)}")
+    
+    # Test 5: Full integration test
+    results.append("\nТест 5: Повний тест (getCity -> getStreet -> getHomeNum)")
     try:
         from services.queue_checker import get_queue_number
         
@@ -700,13 +748,13 @@ async def debug_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         
         if test_result["queue"]:
-            results.append(f"✅ API працює. Тестова адреса: черга {test_result['queue']}")
+            results.append(f"✅ Повний тест успішний. Черга: {test_result['queue']}")
         elif test_result["error"]:
-            results.append(f"⚠️ API відповів з помилкою: {test_result['error']}")
+            results.append(f"⚠️ Помилка: {test_result['error']}")
         else:
             results.append("⚠️ API працює, але не повернув результат")
     except Exception as e:
-        results.append(f"❌ Помилка тесту API: {str(e)}")
+        results.append(f"❌ Помилка повного тесту: {str(e)}")
     
     # Send final results
     final_text = "\n".join(results)

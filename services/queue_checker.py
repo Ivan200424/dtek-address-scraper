@@ -42,6 +42,83 @@ def strip_prefix(text: str, prefixes: list[str]) -> str:
     return text
 
 
+async def search_street(
+    page,
+    csrf_token: str,
+    region_key: str,
+    city: Optional[str],
+    street_query: str,
+) -> Optional[str]:
+    """Search for exact street name using DTEK getStreet API.
+    
+    Args:
+        page: Playwright page object (already opened with CSRF token)
+        csrf_token: CSRF token from the page
+        region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
+        city: City name (can be None for Kyiv)
+        street_query: User's street input to search for
+        
+    Returns:
+        Exact street name from DTEK database or None if not found
+    """
+    is_kyiv = region_key == "kyiv"
+    clean_city = strip_prefix(city, CITY_PREFIXES) if city else ""
+    clean_street = strip_prefix(street_query, STREET_PREFIXES)
+    
+    logger.info("Searching for street: '%s' in city: '%s'", clean_street, clean_city)
+    
+    try:
+        response_data = await page.evaluate(
+            """async ({ isKyiv, city, street, csrfToken }) => {
+                const formData = new URLSearchParams();
+                formData.append("method", "getStreet");
+
+                let i = 0;
+                
+                if (!isKyiv && city) {
+                    formData.append(`data[${i}][name]`, "city");
+                    formData.append(`data[${i}][value]`, city);
+                    i++;
+                }
+
+                formData.append(`data[${i}][name]`, "street");
+                formData.append(`data[${i}][value]`, street);
+
+                const response = await fetch("/ua/ajax", {
+                    method: "POST",
+                    headers: {
+                        "x-requested-with": "XMLHttpRequest",
+                        "x-csrf-token": csrfToken,
+                    },
+                    body: formData,
+                });
+                return await response.json();
+            }""",
+            {"isKyiv": is_kyiv, "city": clean_city, "street": clean_street, "csrfToken": csrf_token}
+        )
+        
+        logger.debug("getStreet response: %s", response_data)
+        
+        # Response format: { data: ["exact street name 1", "exact street name 2", ...] }
+        if response_data and "data" in response_data:
+            data = response_data["data"]
+            if isinstance(data, list) and len(data) > 0:
+                # Return the first matching street name
+                exact_street = data[0]
+                logger.info("Found exact street name: '%s' for query: '%s'", exact_street, clean_street)
+                return exact_street
+            else:
+                logger.warning("No streets found for query: '%s'", clean_street)
+                return None
+        else:
+            logger.warning("Invalid getStreet response format")
+            return None
+            
+    except Exception as e:
+        logger.error("Error searching for street: %s", e, exc_info=True)
+        return None
+
+
 async def get_queue_number(
     region_key: str,
     city: Optional[str],
@@ -53,13 +130,14 @@ async def get_queue_number(
     This function:
     1. Opens the DTEK shutdowns page via Playwright
     2. Extracts CSRF token from meta tag
-    3. Makes POST request to /ua/ajax with method=getHomeNum using page.evaluate()
-    4. Parses JSON response to extract queue number from response.data[building].group
+    3. Calls getStreet API to resolve exact street name
+    4. Makes POST request to /ua/ajax with method=getHomeNum using page.evaluate()
+    5. Parses JSON response to extract queue number from response.data[building].group
     
     Args:
         region_key: Region key (kyiv, kyiv_region, dnipro, odesa)
         city: City name (can be None for Kyiv)
-        street: Street name
+        street: Street name (will be resolved via getStreet API)
         building: Building number
         
     Returns:
@@ -102,15 +180,21 @@ async def get_queue_number(
 
                 logger.info("CSRF token obtained")
 
-                # Step 3: Strip prefixes from city and street names
-                # DTEK API expects clean names without prefixes
+                # Step 3: Resolve exact street name using getStreet API
+                # This ensures we use the correct name from DTEK's database
+                exact_street = await search_street(page, csrf_token, region_key, city, street)
+                
+                # If street resolution failed, fall back to cleaned user input
+                if not exact_street:
+                    logger.warning("Street resolution failed, using cleaned user input")
+                    exact_street = strip_prefix(street, STREET_PREFIXES)
+                
                 is_kyiv = region_key == "kyiv"
                 clean_city = strip_prefix(city, CITY_PREFIXES) if city else ""
-                clean_street = strip_prefix(street, STREET_PREFIXES)
                 
                 logger.info(
-                    "Stripped prefixes - City: '%s' -> '%s', Street: '%s' -> '%s'",
-                    city, clean_city, street, clean_street
+                    "Using street name: '%s' for city: '%s' (from user input: '%s')",
+                    exact_street, clean_city, street
                 )
                 
                 # Step 4: Make AJAX request using page.evaluate (same context as browser)
@@ -146,7 +230,7 @@ async def get_queue_number(
                         });
                         return await response.json();
                     }""",
-                    {"isKyiv": is_kyiv, "city": clean_city, "street": clean_street, "csrfToken": csrf_token}
+                    {"isKyiv": is_kyiv, "city": clean_city, "street": exact_street, "csrfToken": csrf_token}
                 )
 
                 logger.info("AJAX response received")

@@ -206,14 +206,17 @@ async def search_street(
                 return exact_street, city_id
             else:
                 logger.warning("No streets found for query: '%s'", clean_street)
+                # Return None for street but keep city_id for fallback attempt
                 return None, city_id
         else:
             logger.warning("Invalid getStreet response format")
+            # Return None for street but keep city_id for fallback attempt
             return None, city_id
             
     except Exception as e:
         logger.error("Error searching for street: %s", e, exc_info=True)
-        return None, city_id
+        # Return None for both on exception
+        return None, None
 
 
 async def get_queue_number(

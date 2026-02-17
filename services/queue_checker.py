@@ -339,6 +339,12 @@ async def _get_queue_number_attempt(
                 # This ensures we use the correct IDs from DTEK's database
                 exact_street, city_id = await search_street(page, csrf_token, region_key, city, street)
                 
+                # Check if city lookup failed for non-Kyiv regions
+                is_kyiv = region_key == "kyiv"
+                if not is_kyiv and city and city_id is None:
+                    logger.error("City not found in DTEK database: '%s'", city)
+                    return {"queue": None, "error": f"City '{city}' not found in DTEK database", "no_retry": True}
+                
                 # Track if street was found in DTEK database
                 street_not_found = exact_street is None
                 
@@ -346,8 +352,6 @@ async def _get_queue_number_attempt(
                 if street_not_found:
                     logger.warning("Street resolution failed, using cleaned user input")
                     exact_street = strip_prefix(street, STREET_PREFIXES)
-                
-                is_kyiv = region_key == "kyiv"
                 
                 logger.info(
                     "Using street name: '%s' (cityId: %s) (from user input: '%s')",

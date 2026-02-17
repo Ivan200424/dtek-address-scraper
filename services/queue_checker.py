@@ -442,7 +442,6 @@ async def _get_queue_number_form_interaction(
                             if building in option_text or building == option_value:
                                 logger.info("Found building in option: %s", option_text)
                                 # Try to extract queue number from text
-                                import re
                                 queue_match = re.search(r'(\d+\.\d+)', option_text)
                                 if queue_match:
                                     queue_number = queue_match.group(1)
@@ -455,7 +454,6 @@ async def _get_queue_number_form_interaction(
                 
                 # Try to find building and queue in page text
                 # This is a fallback if we can't interact with form elements
-                import re
                 # Look for patterns like "будинок 1 - черга 3.1" or "1 (3.1)"
                 patterns = [
                     rf'{building}\s*[-–—]\s*черга\s*(\d+\.\d+)',

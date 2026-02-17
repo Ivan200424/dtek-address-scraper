@@ -305,7 +305,7 @@ async def _get_queue_number_form_interaction(
                             if city_input:
                                 logger.info("Found city input with selector: %s", selector)
                                 break
-                        except:
+                        except Exception:
                             continue
                     
                     if not city_input:
@@ -339,7 +339,7 @@ async def _get_queue_number_form_interaction(
                                 logger.info("Clicked city suggestion with selector: %s", selector)
                                 suggestion_clicked = True
                                 break
-                        except:
+                        except Exception:
                             continue
                     
                     if not suggestion_clicked:
@@ -366,7 +366,7 @@ async def _get_queue_number_form_interaction(
                         if street_input:
                             logger.info("Found street input with selector: %s", selector)
                             break
-                    except:
+                    except Exception:
                         continue
                 
                 if not street_input:
@@ -382,6 +382,15 @@ async def _get_queue_number_form_interaction(
                 # Wait for autocomplete dropdown to appear
                 await page.wait_for_timeout(1500)
                 
+                # Define autocomplete selectors (same as city autocomplete)
+                autocomplete_selectors = [
+                    '.ui-menu-item:first-child',
+                    '.ui-autocomplete li:first-child',
+                    '[role="option"]:first-child',
+                    '.autocomplete-item:first-child',
+                    '.suggestion:first-child',
+                ]
+                
                 # Try to find and click autocomplete suggestion
                 suggestion_clicked = False
                 for selector in autocomplete_selectors:
@@ -392,7 +401,7 @@ async def _get_queue_number_form_interaction(
                             logger.info("Clicked street suggestion with selector: %s", selector)
                             suggestion_clicked = True
                             break
-                    except:
+                    except Exception:
                         continue
                 
                 if not suggestion_clicked:
@@ -413,7 +422,7 @@ async def _get_queue_number_form_interaction(
                 building_select = None
                 try:
                     building_select = await page.wait_for_selector('select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]', timeout=3000)
-                except:
+                except Exception:
                     pass
                 
                 if building_select:

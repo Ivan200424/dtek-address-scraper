@@ -53,6 +53,9 @@ AUTOCOMPLETE_SELECTORS = [
     '.suggestion:first-child',
 ]
 
+# Building select dropdown selector
+BUILDING_SELECT_SELECTOR = 'select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]'
+
 
 def strip_prefix(text: str, prefixes: list[str]) -> str:
     """Strip known prefixes from text.
@@ -413,23 +416,24 @@ async def _get_queue_number_form_interaction(
                 # Approach 1: Look for building in a select dropdown
                 building_select = None
                 try:
-                    building_select = await page.wait_for_selector('select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]', timeout=3000)
+                    building_select = await page.wait_for_selector(BUILDING_SELECT_SELECTOR, timeout=3000)
                 except Exception:
                     pass
                 
                 if building_select:
                     logger.info("Found building select dropdown")
-                    options_data = await page.evaluate('''() => {
-                        const select = document.querySelector('select[name*="building" i], select[name*="home" i], select[id*="building" i], select[id*="home" i]');
+                    # Use f-string to inject the selector constant into JavaScript
+                    options_data = await page.evaluate(f'''() => {{
+                        const select = document.querySelector('{BUILDING_SELECT_SELECTOR}');
                         if (!select) return null;
                         
-                        const options = Array.from(select.options).map(opt => ({
+                        const options = Array.from(select.options).map(opt => ({{
                             value: opt.value,
                             text: opt.textContent.trim(),
-                        }));
+                        }})));
                         
                         return options;
-                    }''')
+                    }}''')
                     
                     if options_data:
                         logger.debug("Found %d building options", len(options_data))
@@ -456,11 +460,13 @@ async def _get_queue_number_form_interaction(
                 # Try to find building and queue in page text
                 # This is a fallback if we can't interact with form elements
                 # Look for patterns like "будинок 1 - черга 3.1" or "1 (3.1)"
+                # Escape building number to handle special regex characters
+                escaped_building = re.escape(building)
                 patterns = [
-                    rf'{building}\s*[-–—]\s*черга\s*(\d+\.\d+)',
-                    rf'{building}\s*\((\d+\.\d+)\)',
-                    rf'будинок\s*{building}.*?(\d+\.\d+)',
-                    rf'буд\.\s*{building}.*?(\d+\.\d+)',
+                    rf'{escaped_building}\s*[-–—]\s*черга\s*(\d+\.\d+)',
+                    rf'{escaped_building}\s*\((\d+\.\d+)\)',
+                    rf'будинок\s*{escaped_building}.*?(\d+\.\d+)',
+                    rf'буд\.\s*{escaped_building}.*?(\d+\.\d+)',
                 ]
                 
                 for pattern in patterns:

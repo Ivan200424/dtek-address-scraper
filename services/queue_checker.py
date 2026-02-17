@@ -17,6 +17,30 @@ logger = logging.getLogger("services.queue_checker")
 NAVIGATION_TIMEOUT = 60000  # 60 seconds
 AJAX_TIMEOUT = 30000  # 30 seconds
 
+# Prefixes to strip from city and street names
+CITY_PREFIXES = ["м. ", "с. ", "смт. ", "с-ще. "]
+STREET_PREFIXES = ["вул. ", "просп. ", "пров. ", "пл. ", "б-р. "]
+
+
+def strip_prefix(text: str, prefixes: list[str]) -> str:
+    """Strip known prefixes from text.
+
+    Args:
+        text: Text to strip prefix from
+        prefixes: List of prefixes to try removing
+
+    Returns:
+        Text with prefix removed if found, otherwise original text
+    """
+    if not text:
+        return text
+
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            return text[len(prefix):]
+
+    return text
+
 
 async def get_queue_number(
     region_key: str,
@@ -78,24 +102,39 @@ async def get_queue_number(
 
                 logger.info("CSRF token obtained")
 
-                # Step 3: Make AJAX request using page.evaluate (same context as browser)
-                # This mirrors the exact approach from mr-devboy/dtek-monitor
+                # Step 3: Strip prefixes from city and street names
+                # DTEK API expects clean names without prefixes
                 is_kyiv = region_key == "kyiv"
+                clean_city = strip_prefix(city, CITY_PREFIXES) if city else ""
+                clean_street = strip_prefix(street, STREET_PREFIXES)
                 
+                logger.info(
+                    "Stripped prefixes - City: '%s' -> '%s', Street: '%s' -> '%s'",
+                    city, clean_city, street, clean_street
+                )
+                
+                # Step 4: Make AJAX request using page.evaluate (same context as browser)
+                # Fixed: Use dynamic counter for data[] indices instead of hardcoded values
                 response_data = await page.evaluate(
                     """async ({ isKyiv, city, street, csrfToken }) => {
                         const formData = new URLSearchParams();
                         formData.append("method", "getHomeNum");
 
+                        // Use dynamic counter for data[] indices
+                        let i = 0;
+                        
                         if (!isKyiv && city) {
-                            formData.append("data[0][name]", "city");
-                            formData.append("data[0][value]", city);
+                            formData.append(`data[${i}][name]`, "city");
+                            formData.append(`data[${i}][value]`, city);
+                            i++;
                         }
 
-                        formData.append("data[1][name]", "street");
-                        formData.append("data[1][value]", street);
-                        formData.append("data[2][name]", "updateFact");
-                        formData.append("data[2][value]", new Date().toLocaleString("uk-UA"));
+                        formData.append(`data[${i}][name]`, "street");
+                        formData.append(`data[${i}][value]`, street);
+                        i++;
+                        
+                        formData.append(`data[${i}][name]`, "updateFact");
+                        formData.append(`data[${i}][value]`, new Date().toLocaleString("uk-UA"));
 
                         const response = await fetch("/ua/ajax", {
                             method: "POST",
@@ -107,17 +146,18 @@ async def get_queue_number(
                         });
                         return await response.json();
                     }""",
-                    {"isKyiv": is_kyiv, "city": city or "", "street": street, "csrfToken": csrf_token}
+                    {"isKyiv": is_kyiv, "city": clean_city, "street": clean_street, "csrfToken": csrf_token}
                 )
 
                 logger.info("AJAX response received")
                 logger.debug("Response data keys: %s", list(response_data.keys()) if isinstance(response_data, dict) else "not a dict")
 
-                # Step 4: Extract queue number from response
+                # Step 5: Extract queue number from response
                 # Response format: { data: { "1": { group: "2.1", ... }, "2": { ... } }, ... }
                 # The building number is the key in the data object
                 if not response_data or "data" not in response_data:
-                    logger.warning("No 'data' field in response")
+                    logger.warning("No 'data' field in response for %s, %s, %s", clean_city, clean_street, building)
+                    logger.debug("Full response: %s", response_data)
                     return None
 
                 data = response_data["data"]
@@ -125,6 +165,9 @@ async def get_queue_number(
                 if not isinstance(data, dict):
                     logger.warning("Response 'data' is not a dict: %s", type(data))
                     return None
+                
+                logger.info("Response contains %d building entries", len(data))
+                logger.debug("Available buildings in response: %s", list(data.keys())[:20])
 
                 # Try exact match first
                 house_data = data.get(building)
